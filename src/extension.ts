@@ -374,18 +374,29 @@ function copyAttachCommand(session: DtachSession): void {
 }
 
 /**
- * Terminate one session's dtach server and remove its socket. The owning process
- * is resolved by lsof on the current path, falling back to a pgrep on the hash
- * anchor (rename-safe), or the escaped full path for legacy hashless sockets.
+ * Shell snippet that prints the pids holding a session's socket — the dtach
+ * master plus any attached clients. Resolved by lsof on the current path,
+ * falling back to a pgrep on the hash anchor (rename-safe), or the escaped full
+ * path for legacy hashless sockets. Shared by killOne (which kills them) and
+ * sessionCwd (which walks the master to its shell).
  */
-async function killOne(session: DtachSession): Promise<void> {
+function resolvePidsCommand(session: DtachSession): string {
   const sock = shellEscape(session.socket);
   const hash = hashOf(path.basename(session.socket));
   const fallback = hash
     ? `pgrep -f ${shellEscape(`_${hash}\\.dtach`)}`
     : `pgrep -f ${shellEscape(escapeRegex(session.socket))}`;
+  return `lsof -t ${sock} 2>/dev/null || ${fallback} 2>/dev/null`;
+}
+
+/**
+ * Terminate one session's dtach server and remove its socket. The owning process
+ * is resolved by resolvePidsCommand (lsof, falling back to a rename-safe pgrep).
+ */
+async function killOne(session: DtachSession): Promise<void> {
+  const sock = shellEscape(session.socket);
   const cmd =
-    `pids=$(lsof -t ${sock} 2>/dev/null || ${fallback} 2>/dev/null); ` +
+    `pids=$(${resolvePidsCommand(session)}); ` +
     `[ -n "$pids" ] && kill $pids 2>/dev/null; ` +
     `rm -f ${sock}`;
 
@@ -444,6 +455,52 @@ async function killAll(provider: DtachTreeProvider): Promise<void> {
   provider.refresh();
 }
 
+/**
+ * Best-effort working directory of a session's shell, so a restart can reopen
+ * there rather than at $HOME. The processes holding the socket are the dtach
+ * master plus any attached clients (same set killOne resolves); only the master
+ * has a child (the shell), so find that child and read its cwd via lsof. Returns
+ * undefined when it can't be determined (no proc found, lsof missing, etc.).
+ */
+function sessionCwd(session: DtachSession): Promise<string | undefined> {
+  const cmd =
+    `pids=$(${resolvePidsCommand(session)}); ` +
+    `for p in $pids; do ` +
+    `c=$(pgrep -P "$p" 2>/dev/null | head -1); ` +
+    `if [ -n "$c" ]; then ` +
+    `lsof -a -p "$c" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1; break; ` +
+    `fi; done`;
+  return new Promise((resolve) => {
+    exec(cmd, (_err, stdout) => {
+      const dir = stdout.trim();
+      resolve(dir.length ? dir : undefined);
+    });
+  });
+}
+
+/**
+ * Restart a session in place: terminate the dtach server (and dispose its dead
+ * terminal), then create a fresh session under the same name, reopening in the
+ * old shell's working directory when it can be resolved. Goes through
+ * createSession, so it mints a new hash, opens a new terminal, and runs the
+ * configured startupCommand — exactly as a create would. Confirmed first, since
+ * it destroys whatever the session was running.
+ */
+async function restart(provider: DtachTreeProvider, session: DtachSession): Promise<void> {
+  const choice = await vscode.window.showWarningMessage(
+    `Restart dtach session "${session.name}"? This terminates the running session and starts a fresh shell.`,
+    { modal: true },
+    'Restart'
+  );
+  if (choice !== 'Restart') {
+    return;
+  }
+  const cwd = await sessionCwd(session); // capture before kill; the proc is gone after
+  await killOne(session); // remove the old socket first so the name is free to reuse
+  createSession(provider, session.name, cwd);
+  provider.refresh();
+}
+
 /** Resolve a command argument (a tree node or session) to a DtachSession. */
 function toSession(item: SessionItem | DtachSession): DtachSession {
   return item instanceof SessionItem ? item.session : item;
@@ -483,12 +540,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('dtachSessions.openInFolder', (uri?: vscode.Uri) =>
       openInFolder(provider, uri)
     ),
-    vscode.commands.registerCommand('dtachSessions.attach', (s: DtachSession) => attach(s)),
+    vscode.commands.registerCommand('dtachSessions.attach', (item: SessionItem | DtachSession) =>
+      attach(toSession(item))
+    ),
     vscode.commands.registerCommand('dtachSessions.rename', (item: SessionItem | DtachSession) =>
       rename(provider, toSession(item))
     ),
     vscode.commands.registerCommand('dtachSessions.detach', (item: SessionItem | DtachSession) =>
       detach(toSession(item))
+    ),
+    vscode.commands.registerCommand('dtachSessions.restart', (item: SessionItem | DtachSession) =>
+      restart(provider, toSession(item))
     ),
     vscode.commands.registerCommand('dtachSessions.quickSwitch', () => quickSwitch(provider)),
     vscode.commands.registerCommand('dtachSessions.copySocketPath', (item: SessionItem | DtachSession) =>

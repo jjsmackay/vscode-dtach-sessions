@@ -54,6 +54,13 @@
       {
         "command": "dtachSessions.attach",
         "title": "Attach",
+        "icon": "$(play)",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.restart",
+        "title": "Restart (kill and start a fresh shell)",
+        "icon": "$(debug-restart)",
         "category": "dtach Sessions"
       },
       {
@@ -76,6 +83,7 @@
       {
         "command": "dtachSessions.detach",
         "title": "Detach (keep session alive)",
+        "icon": "media/pause-blue.svg",
         "category": "dtach Sessions"
       },
       {
@@ -119,9 +127,24 @@
       ],
       "view/item/context": [
         {
+          "command": "dtachSessions.attach",
+          "when": "view == dtachSessionsView && viewItem == dtachSession-detached",
+          "group": "inline@1"
+        },
+        {
+          "command": "dtachSessions.detach",
+          "when": "view == dtachSessionsView && viewItem == dtachSession-attached",
+          "group": "inline@1"
+        },
+        {
+          "command": "dtachSessions.restart",
+          "when": "view == dtachSessionsView && viewItem =~ /^dtachSession-/",
+          "group": "inline@2"
+        },
+        {
           "command": "dtachSessions.kill",
-          "when": "view == dtachSessionsView",
-          "group": "inline"
+          "when": "view == dtachSessionsView && viewItem =~ /^dtachSession-/",
+          "group": "inline@3"
         },
         {
           "command": "dtachSessions.rename",
@@ -144,9 +167,14 @@
           "group": "2_copy@2"
         },
         {
-          "command": "dtachSessions.kill",
+          "command": "dtachSessions.restart",
           "when": "view == dtachSessionsView",
           "group": "3_danger@1"
+        },
+        {
+          "command": "dtachSessions.kill",
+          "when": "view == dtachSessionsView",
+          "group": "3_danger@2"
         }
       ],
       "explorer/context": [
@@ -173,6 +201,10 @@
         },
         {
           "command": "dtachSessions.detach",
+          "when": "false"
+        },
+        {
+          "command": "dtachSessions.restart",
           "when": "false"
         },
         {

@@ -156,8 +156,11 @@ function relativeAge(mtimeMs: number): string {
 export class SessionItem extends vscode.TreeItem {
   constructor(public readonly session: DtachSession, attachedIcon?: vscode.Uri) {
     super(session.name, vscode.TreeItemCollapsibleState.None);
-    this.contextValue = 'dtachSession';
     const attached = findTerminalForSocket(session) !== undefined;
+    // Attach-state in the contextValue gates the per-row inline icons: detached
+    // rows show play (attach), attached rows show pause (detach). Restart and
+    // Kill match both via a `viewItem =~ /^dtachSession-/` clause.
+    this.contextValue = attached ? 'dtachSession-attached' : 'dtachSession-detached';
     const age = relativeAge(session.mtimeMs);
     this.description = attached ? `attached · ${age}` : age;
     this.tooltip = `${session.socket}\nlast modified ${age}${attached ? '\nattached in this window' : ''}`;

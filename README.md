@@ -49,14 +49,21 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
   to fuzzy-find and attach a session without leaving the keyboard.
 - **Rename** — right-click a row → Rename. Moves the socket (keeping its id) and
   relabels the open terminal. The live session is preserved.
-- **Detach** — right-click a row → Detach to close this window's terminal while
-  leaving the dtach server running for later reattachment.
+- **Detach / Attach** — each row carries an inline icon for its primary action:
+  attached rows show a blue **pause** (detach — close this window's terminal,
+  leave the dtach server running); detached rows show a **play** (attach). The
+  same actions are on the right-click menu.
+- **Restart** — the inline restart icon (or right-click → Restart, with
+  confirmation) terminates the dtach server and opens a fresh shell under the
+  same name, re-running `startupCommand`. Use it to relaunch a session that's
+  wedged; in-session scrollback does not survive.
 - **Copy** — right-click a row → Copy Socket Path / Copy Attach Command for
   scripting or SSH.
-- **Kill** — right-click a row → Kill (with confirmation) to terminate the dtach
-  server and remove its socket. Select multiple rows to kill them together, or use
-  **Kill All Sessions** from the view's `…` menu. The owning process is resolved by
-  the session id, so renamed sessions are killed cleanly rather than orphaned.
+- **Kill** — the inline trash icon (or right-click → Kill), with confirmation,
+  terminates the dtach server and removes its socket. Select multiple rows to
+  kill them together, or use **Kill All Sessions** from the view's `…` menu. The
+  owning process is resolved by the session id, so renamed sessions are killed
+  cleanly rather than orphaned.
 
 ## Configuration
 

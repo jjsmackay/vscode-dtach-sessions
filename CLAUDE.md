@@ -52,4 +52,14 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
   re-keys the registry (the live attach survives the socket move by inode); with
   it off, rename disposes and recreates the terminal under the new name.
 - Attached rows use a baked-green SVG (`media/terminal-green.svg`), not a
-  recoloured codicon: VS Code washes codicon colour out on row selection.
+  recoloured codicon: VS Code washes codicon colour out on row selection. The
+  blue detach/pause inline icon (`media/pause-blue.svg`) is baked for the same
+  reason — inline action icons aren't per-command themeable.
+- `SessionItem.contextValue` encodes attach state (`dtachSession-attached` /
+  `dtachSession-detached`) so the per-row inline icons can swap: play (attach)
+  on detached rows, pause (detach) on attached rows. Restart and Kill show on
+  both via a `viewItem =~ /^dtachSession-/` clause. Existing context-menu
+  entries gate on `view ==` (not `viewItem`), so they're unaffected by the split.
+- Restart = confirm → `killOne` → `createSession(name)`: it composes the kill
+  and create paths (fresh hash, fresh terminal, re-runs `startupCommand`); the
+  dtach server and its scrollback do not survive.
