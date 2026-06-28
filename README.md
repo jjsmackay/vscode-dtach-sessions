@@ -29,6 +29,12 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
 - **Attach** — click a row to open a terminal running `dtach -a <socket> -r winch`.
   The `-r winch` forces a redraw so a live TUI renders immediately. Clicking a
   session that already has an open terminal focuses it instead of opening a second.
+  By default (`dtachSessions.reflectProcessTitle`) the terminal is created without
+  a fixed name so the running program's title drives the tab — e.g. an agent CLI's
+  live status — while the session name labels the sidebar row. Until the program
+  sets its own title, the tab falls back to the session name (dtach is launched
+  with that as its process label via `argv[0]`). Set the option to `false` to pin
+  the session name on the tab instead. See the title note below for limits.
 - **Create** — the `+` button prompts for a name (validated against empty,
   whitespace, and slashes) and opens `dtach -A <socket> -r winch $SHELL`. Sockets
   are named `<prefix><name>_<hash>.dtach`; the `_<hash>` is a stable id that lets a
@@ -61,6 +67,7 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
 | `dtachSessions.startupCommand` | `` (empty) | Command run inside a session's shell on create (not reattach), e.g. `claude`. |
 | `dtachSessions.redrawMethod` | `winch` | `-r` value on attach/create. One of `winch`, `ctrl_l`, `none`. See note below. |
 | `dtachSessions.dtachPath` | `dtach` | Path to the dtach binary; set absolute if not on PATH. |
+| `dtachSessions.reflectProcessTitle` | `true` | Create attach terminals without a fixed name so the running program's title (e.g. an agent CLI's live status) drives the tab. The session name still labels the sidebar row. Set `false` to pin the session name on the tab. |
 
 **Migration note (prefix default):** the default `socketPrefix` is now empty
 (was `.claude-`). Sockets created by older versions are named `.claude-*.dtach`
@@ -73,6 +80,18 @@ differs from the size at detach — reattaching at the same size can leave a TUI
 blank until the next resize. `ctrl_l` forces a redraw regardless of size, but it
 sends a literal Ctrl-L to the program, which some TUIs (including Claude) treat
 as a clear-screen keystroke. Pick whichever trade-off suits your workflow.
+
+**Title note (`reflectProcessTitle`):** VS Code only honours an escape-set tab
+title from a process it detects as an agent CLI (Claude Code, Copilot, Gemini),
+so the extension can't seed the tab itself — when you *resume* an idle agent it
+won't re-emit its title until it next changes state, so the tab shows the
+session-name fallback until then. Separately, agent CLIs running under dtach may
+log a VS Code IPC/extension-install error and lose editor integration on
+reattach: dtach freezes the program's environment at creation, so the
+`VSCODE_IPC_HOOK_CLI` socket it inherited goes stale when you reattach from a
+different window. Both are inherent to a detached-session model and harmless to
+the program itself; set `reflectProcessTitle: false` if you'd rather just pin the
+session name on the tab.
 
 ## Build
 

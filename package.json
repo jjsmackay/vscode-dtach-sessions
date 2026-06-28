@@ -227,6 +227,11 @@
           "type": "string",
           "default": "dtach",
           "description": "Path to the dtach binary. Use an absolute path if dtach is not on the extension host PATH."
+        },
+        "dtachSessions.reflectProcessTitle": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, attached terminals are created without a fixed name so the running program's title drives the tab — e.g. an agent CLI's live status. The session name still labels the sidebar row. Disable to keep the session name pinned on the tab instead."
         }
       }
     }

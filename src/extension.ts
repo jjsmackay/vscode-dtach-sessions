@@ -9,10 +9,89 @@ import {
   SessionItem,
   config,
   findTerminalForSocket,
+  registerTerminal,
+  unregisterTerminal,
+  rekeyTerminal,
   hashOf,
 } from './provider';
 
 const SHELL = process.env.SHELL || '/bin/bash';
+
+// Used to relabel the dtach process via `exec -a` (a bash builtin) so the tab's
+// fallback name reads the session, not "dtach". Absent on some minimal hosts;
+// we fall back to launching dtach directly there.
+const HAS_BASH = fs.existsSync('/bin/bash');
+
+// Persisted socket -> pid map. Survives a window reload (which strips a restored
+// terminal's shellArgs but keeps its pid) and is rebuilt into the in-memory
+// reattach registry on activate. Lives in workspaceState — per-window, no need
+// to outlast a full editor restart, which does not restore terminals anyway.
+const PID_MAP_KEY = 'dtachSessions.socketPids';
+let mementoState: vscode.Memento | undefined;
+
+function pidMap(): Record<string, number> {
+  return mementoState?.get<Record<string, number>>(PID_MAP_KEY, {}) ?? {};
+}
+
+/** Read-modify-write the persisted socket->pid map: set a pid, or clear it (pid null). */
+function updatePidMap(socket: string, pid: number | null): void {
+  if (!mementoState) {
+    return;
+  }
+  const map = pidMap();
+  if (pid === null) {
+    delete map[socket];
+  } else {
+    map[socket] = pid;
+  }
+  void mementoState.update(PID_MAP_KEY, map);
+}
+
+function persistPid(socket: string, term: vscode.Terminal): void {
+  void term.processId.then((pid) => {
+    if (pid) {
+      updatePidMap(socket, pid);
+    }
+  });
+}
+
+function dropPid(socket: string): void {
+  updatePidMap(socket, null);
+}
+
+/** Record a freshly created terminal for reattach: in-memory registry + persisted pid. */
+function trackTerminal(socket: string, term: vscode.Terminal): void {
+  registerTerminal(socket, term);
+  persistPid(socket, term);
+}
+
+/**
+ * Rebuild the reattach registry after a window reload. Restored terminals have
+ * lost their shellArgs but kept their processId, so match live terminals' pids
+ * against the persisted socket->pid map; prune entries whose terminal is gone.
+ */
+async function reconcileTerminals(provider: DtachTreeProvider): Promise<void> {
+  if (!mementoState) {
+    return;
+  }
+  const byPid = new Map<number, string>();
+  for (const [socket, pid] of Object.entries(pidMap())) {
+    byPid.set(pid, socket);
+  }
+  const terminals = vscode.window.terminals;
+  const pids = await Promise.all(terminals.map((t) => t.processId));
+  const survivors: Record<string, number> = {};
+  terminals.forEach((t, i) => {
+    const pid = pids[i];
+    if (pid && byPid.has(pid)) {
+      const socket = byPid.get(pid)!;
+      registerTerminal(socket, t);
+      survivors[socket] = pid;
+    }
+  });
+  await mementoState.update(PID_MAP_KEY, survivors);
+  provider.refresh();
+}
 
 function redrawArgs(redraw: string): string[] {
   return redraw && redraw !== 'none' ? ['-r', redraw] : [];
@@ -66,12 +145,33 @@ function showOrCreateTerminal(
     existing.show();
     return undefined;
   }
-  const term = vscode.window.createTerminal({
-    name: session.name,
-    shellPath: dtachPath,
-    shellArgs: args,
-    cwd,
-  });
+  // With reflectProcessTitle off, pin the session name as the tab title.
+  //
+  // With it on, omit the API name so the attached program's title drives the tab
+  // (VS Code honours an escape-set title only from a process it detects as an
+  // agent CLI, so we cannot seed one ourselves — the shell/dtach would be
+  // ignored). Until the program emits its title, VS Code falls back to the
+  // process name, which is "dtach". So launch dtach with argv[0] set to the
+  // session name via bash `exec -a` (VS Code reads argv[0] for that fallback):
+  // the tab reads the session name instead of "dtach", and the program's own
+  // title takes over once it sets one. The socket stays a standalone, dtach
+  // arg so socketFromTerminal still matches it. Where bash is unavailable we
+  // launch dtach directly and accept the "dtach" fallback.
+  const reflect = config().reflectProcessTitle;
+  let options: vscode.TerminalOptions;
+  if (!reflect) {
+    options = { name: session.name, shellPath: dtachPath, shellArgs: args, cwd };
+  } else if (HAS_BASH) {
+    options = {
+      shellPath: '/bin/bash',
+      shellArgs: ['-c', 'exec -a "$0" "$@"', session.name, dtachPath, ...args],
+      cwd,
+    };
+  } else {
+    options = { shellPath: dtachPath, shellArgs: args, cwd };
+  }
+  const term = vscode.window.createTerminal(options);
+  trackTerminal(session.socket, term);
   term.show();
   return term;
 }
@@ -192,7 +292,7 @@ async function rename(provider: DtachTreeProvider, session: DtachSession): Promi
     );
     return;
   }
-  const { socketDir, socketPrefix, redrawMethod, dtachPath } = config();
+  const { socketDir, socketPrefix, redrawMethod, dtachPath, reflectProcessTitle } = config();
   const others = new Set(
     provider.listSessions().filter((s) => s.socket !== session.socket).map((s) => s.name)
   );
@@ -218,14 +318,24 @@ async function rename(provider: DtachTreeProvider, session: DtachSession): Promi
     );
     return;
   }
-  // VS Code has no terminal-rename API; dispose and reattach under the new name.
   if (term) {
-    term.dispose();
-    showOrCreateTerminal(
-      { name: newName, socket: newSocket },
-      ['-a', newSocket, ...redrawArgs(redrawMethod)],
-      dtachPath
-    );
+    if (reflectProcessTitle) {
+      // The live attach survives the socket move — the unix-socket connection is
+      // held by inode, not path — and there is no pinned tab name to rebuild, so
+      // just re-point our tracking at the new socket. No dispose/reattach flash.
+      rekeyTerminal(session.socket, newSocket);
+      dropPid(session.socket);
+      persistPid(newSocket, term);
+    } else {
+      // VS Code has no terminal-rename API; dispose and reattach under the new
+      // name (the close handler untracks the old terminal).
+      term.dispose();
+      showOrCreateTerminal(
+        { name: newName, socket: newSocket },
+        ['-a', newSocket, ...redrawArgs(redrawMethod)],
+        dtachPath
+      );
+    }
   }
   provider.refresh();
 }
@@ -340,11 +450,16 @@ function toSession(item: SessionItem | DtachSession): DtachSession {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  mementoState = context.workspaceState;
   const provider = new DtachTreeProvider(context.extensionUri);
   const view = vscode.window.createTreeView('dtachSessionsView', {
     treeDataProvider: provider,
     canSelectMany: true,
   });
+
+  // Rebuild the reattach registry from the persisted pid map for terminals that
+  // a window reload restored before this activation.
+  void reconcileTerminals(provider);
 
   context.subscriptions.push(
     view,
@@ -356,7 +471,13 @@ export function activate(context: vscode.ExtensionContext): void {
     // Keep the attached-state icon honest: re-render when a terminal opens
     // (attach), closes, or is disposed (detach, kill, rename).
     vscode.window.onDidOpenTerminal(() => provider.refresh()),
-    vscode.window.onDidCloseTerminal(() => provider.refresh()),
+    vscode.window.onDidCloseTerminal((t) => {
+      const socket = unregisterTerminal(t);
+      if (socket) {
+        dropPid(socket);
+      }
+      provider.refresh();
+    }),
     vscode.commands.registerCommand('dtachSessions.refresh', () => provider.refresh()),
     vscode.commands.registerCommand('dtachSessions.create', () => create(provider)),
     vscode.commands.registerCommand('dtachSessions.openInFolder', (uri?: vscode.Uri) =>
