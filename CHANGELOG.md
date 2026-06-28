@@ -5,6 +5,28 @@ All notable changes to the **dtach Sessions** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-29
+
+### Added
+
+- **Live Claude status on session rows.** Each row shows the run-state of a
+  Claude Code instance running inside it — working, running a tool, waiting on
+  you, or idle. State appears as a text badge and a row icon: a spinner while
+  busy and an amber bell when Claude needs your attention. Enable it with the
+  **dtach Sessions: Install Claude Status Hooks** command (or the one-time
+  prompt); toggle with `dtachSessions.showClaudeStatus` (on by default). Linux
+  remote hosts only.
+- **Install Claude Status Hooks** and **Uninstall Claude Status Hooks**
+  commands. Install wires a small forwarder into `~/.claude/settings.json`,
+  merged alongside any hooks you already have; uninstall removes only its
+  entries.
+
+### Changed
+
+- When live status is available, a row's relative time is measured from
+  Claude's last activity (time in the current state, or since it last acted)
+  instead of the socket's mtime.
+
 ## [0.1.6] - 2026-06-29
 
 First public release on the Visual Studio Marketplace. Packaging and metadata
@@ -61,6 +83,7 @@ only — no behaviour changes.
   native integrated terminals on the remote extension host, with terminal
   reuse that survives a window reload.
 
+[0.2.0]: https://github.com/jjsmackay/vscode-dtach-sessions/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/jjsmackay/vscode-dtach-sessions/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/jjsmackay/vscode-dtach-sessions/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/jjsmackay/vscode-dtach-sessions/compare/v0.1.3...v0.1.4
