@@ -1,0 +1,19 @@
+# Claude Code local config
+.claude
+
+# Node
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+
+# TypeScript build output
+out/
+dist/
+*.tsbuildinfo
+
+# VS Code extension package
+*.vsix
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

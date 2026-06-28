@@ -1,0 +1,244 @@
+{
+  "name": "dtach-sessions",
+  "displayName": "dtach Sessions",
+  "description": "List and attach to dtach sessions from a VS Code sidebar.",
+  "version": "0.1.4",
+  "publisher": "CleverMonkey",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dtachSessions",
+          "title": "dtach Sessions",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "dtachSessions": [
+        {
+          "id": "dtachSessionsView",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dtachSessions.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.create",
+        "title": "New Session",
+        "icon": "$(add)",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.openInFolder",
+        "title": "Open in Detach Session",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.attach",
+        "title": "Attach",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.kill",
+        "title": "Kill",
+        "icon": "$(trash)",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.killAll",
+        "title": "Kill All Sessions",
+        "icon": "$(trash)",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.rename",
+        "title": "Rename",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.detach",
+        "title": "Detach (keep session alive)",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.quickSwitch",
+        "title": "Switch Session",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.copySocketPath",
+        "title": "Copy Socket Path",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.copyAttachCommand",
+        "title": "Copy Attach Command",
+        "category": "dtach Sessions"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dtachSessions.create",
+          "when": "view == dtachSessionsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dtachSessions.refresh",
+          "when": "view == dtachSessionsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dtachSessions.quickSwitch",
+          "when": "view == dtachSessionsView",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "dtachSessions.killAll",
+          "when": "view == dtachSessionsView",
+          "group": "1_actions@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "dtachSessions.kill",
+          "when": "view == dtachSessionsView",
+          "group": "inline"
+        },
+        {
+          "command": "dtachSessions.rename",
+          "when": "view == dtachSessionsView",
+          "group": "1_modify@1"
+        },
+        {
+          "command": "dtachSessions.detach",
+          "when": "view == dtachSessionsView",
+          "group": "1_modify@2"
+        },
+        {
+          "command": "dtachSessions.copySocketPath",
+          "when": "view == dtachSessionsView",
+          "group": "2_copy@1"
+        },
+        {
+          "command": "dtachSessions.copyAttachCommand",
+          "when": "view == dtachSessionsView",
+          "group": "2_copy@2"
+        },
+        {
+          "command": "dtachSessions.kill",
+          "when": "view == dtachSessionsView",
+          "group": "3_danger@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "dtachSessions.openInFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@30"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "dtachSessions.quickSwitch"
+        },
+        {
+          "command": "dtachSessions.killAll"
+        },
+        {
+          "command": "dtachSessions.attach",
+          "when": "false"
+        },
+        {
+          "command": "dtachSessions.rename",
+          "when": "false"
+        },
+        {
+          "command": "dtachSessions.detach",
+          "when": "false"
+        },
+        {
+          "command": "dtachSessions.copySocketPath",
+          "when": "false"
+        },
+        {
+          "command": "dtachSessions.copyAttachCommand",
+          "when": "false"
+        },
+        {
+          "command": "dtachSessions.kill",
+          "when": "false"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "dtachSessionsView",
+        "contents": "No dtach sessions yet.\n[New Session](command:dtachSessions.create)\nSessions you create appear here and survive window reloads."
+      }
+    ],
+    "configuration": {
+      "title": "dtach Sessions",
+      "properties": {
+        "dtachSessions.socketDir": {
+          "type": "string",
+          "default": "~/.dtach-sessions",
+          "description": "Directory containing dtach socket files. A leading ~ expands to the home directory. Created automatically when a session is made."
+        },
+        "dtachSessions.socketPrefix": {
+          "type": "string",
+          "default": "",
+          "description": "Filename prefix for dtach sockets. Files are named <prefix><name>_<hash>.dtach. Defaults to empty; the dedicated socket directory plus the .dtach suffix identify sessions. Set this to '.claude-' to keep seeing sockets created by older versions."
+        },
+        "dtachSessions.startupCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Command run inside a session's shell immediately after it is created (e.g. 'claude'). Runs on create only, never on reattach. Empty disables it."
+        },
+        "dtachSessions.redrawMethod": {
+          "type": "string",
+          "enum": [
+            "winch",
+            "ctrl_l",
+            "none"
+          ],
+          "default": "winch",
+          "description": "dtach redraw method passed as -r on attach and create. 'none' omits -r."
+        },
+        "dtachSessions.dtachPath": {
+          "type": "string",
+          "default": "dtach",
+          "description": "Path to the dtach binary. Use an absolute path if dtach is not on the extension host PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
