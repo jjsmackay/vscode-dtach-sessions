@@ -10,3 +10,4 @@ media/logo.svg
 tsconfig.json
 **/*.ts
 **/*.map
+**/__pycache__/**

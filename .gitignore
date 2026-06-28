@@ -11,6 +11,10 @@ out/
 dist/
 *.tsbuildinfo
 
+# Python bytecode (the bundled hook forwarder)
+__pycache__/
+*.pyc
+
 # VS Code extension package
 *.vsix
 

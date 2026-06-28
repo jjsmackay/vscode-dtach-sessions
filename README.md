@@ -17,6 +17,8 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
 - For the **Kill** command: `lsof` (preferred) or `pgrep` on the host. Kill uses
   `lsof -t <socket>` to find the owning process and falls back to a
   regex-escaped `pgrep -f` if `lsof` is unavailable; it then removes the socket.
+- For **live Claude status** (optional): `python3` on the host, and a Linux host
+  (the forwarder reads `/proc`). Other hosts simply show no status.
 
 ## Features
 
@@ -64,6 +66,14 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
   kill them together, or use **Kill All Sessions** from the view's `…` menu. The
   owning process is resolved by the session id, so renamed sessions are killed
   cleanly rather than orphaned.
+- **Live Claude status** — each row shows the run-state of a Claude Code instance
+  running inside it: **working**, **tool: `<name>`**, or **waiting** (blocked on
+  you); idle sessions just show their age. Run **dtach Sessions: Install Claude
+  Status Hooks** once (or accept the one-time prompt) to wire a small forwarder
+  into `~/.claude/settings.json`; it merges alongside any hooks you already have,
+  and **Uninstall Claude Status Hooks** removes only its entries. Sessions already
+  running Claude pick up status after a restart, since Claude reads hooks at
+  session start. See the status note below. Linux hosts only.
 
 ## Configuration
 
@@ -75,6 +85,7 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
 | `dtachSessions.redrawMethod` | `winch` | `-r` value on attach/create. One of `winch`, `ctrl_l`, `none`. See note below. |
 | `dtachSessions.dtachPath` | `dtach` | Path to the dtach binary; set absolute if not on PATH. |
 | `dtachSessions.reflectProcessTitle` | `true` | Create attach terminals without a fixed name so the running program's title (e.g. an agent CLI's live status) drives the tab. The session name still labels the sidebar row. Set `false` to pin the session name on the tab. |
+| `dtachSessions.showClaudeStatus` | `true` | Show a Claude Code instance's live run-state (working / tool / waiting / idle) on each session row. Requires the status hooks (see Features). Linux hosts only. |
 
 **Migration note (prefix default):** the default `socketPrefix` is now empty
 (was `.claude-`). Sockets created by older versions are named `.claude-*.dtach`
@@ -99,6 +110,16 @@ reattach: dtach freezes the program's environment at creation, so the
 different window. Both are inherent to a detached-session model and harmless to
 the program itself; set `reflectProcessTitle: false` if you'd rather just pin the
 session name on the tab.
+
+**Status note (`showClaudeStatus`):** the forwarder maps each Claude session to
+its row by walking `/proc` from the firing hook up to the dtach master process,
+reading the socket path (and its `_<hash>` id) from that process's command line
+— so status follows a session across rename and reattach, and works for sessions
+created outside the extension too. It is a no-op when not running under dtach, so
+the host-global hook is harmless to your other Claude sessions. A session that
+exits without a clean stop (crash, killed connection) decays from *working* back
+to its age after a couple of minutes rather than sticking. Sessions whose socket
+predates the `_<hash>` id scheme show no status.
 
 ## Build
 

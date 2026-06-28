@@ -19,7 +19,11 @@ No test suite; verify against the acceptance checks in `README.md`.
   kill/detach/copy), terminal creation, `activate()` command registration.
 - `src/provider.ts` — `DtachTreeProvider` (tree rendering), `config()`, and the
   socket/name utilities: `displayName`, `hashOf`, `findTerminalForSocket`,
-  `socketFromTerminal`, `relativeAge`.
+  `socketFromTerminal`, `relativeAge`. Also the Claude-status read side:
+  `readStatuses` and `statusLabel` (with staleness decay).
+- `scripts/claude-status-hook.py` — the bundled Claude hook forwarder (shipped in
+  the `.vsix`; copied to `~/.dtach-sessions/hook` on install). Stand-alone; no
+  knowledge of VS Code config.
 Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
 
 ## Workflow
@@ -63,3 +67,19 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
 - Restart = confirm → `killOne` → `createSession(name)`: it composes the kill
   and create paths (fresh hash, fresh terminal, re-runs `startupCommand`); the
   dtach server and its scrollback do not survive.
+- Live Claude status (`showClaudeStatus`, default on) is hook-driven, not from
+  PTY/transcript scraping. The bundled `scripts/claude-status-hook.py` forwarder
+  is merged into every lifecycle event in `~/.claude/settings.json` by the
+  Install command (idempotent; ours is recognised by the `HOOK_PATH` substring,
+  so Uninstall is surgical). It runs host-global for **every** Claude on the box;
+  it correlates to a session by walking `/proc` ppids to the dtach master and
+  reading the `*.dtach` socket from its cmdline (the same standalone-arg the
+  `exec -a` launcher preserves — `argv[0]` relabelling doesn't hide it), then
+  writes `<socketDir>/status/<hash>.json` atomically. No `.dtach` ancestor ⇒
+  cheap no-op. Status is carried in the row **description**, separate from the
+  `contextValue` attach-state split above — run-state and attach-state compose
+  on a row without either suppressing the other. Provider decays stale
+  `working`/`tool` (not `waiting`) to age so a crashed Claude doesn't stick. The
+  install **nudge** is gated on `~/.claude/` existing (the "runs Claude" signal —
+  PATH is unreliable on the extension host) + not-installed + a `globalState`
+  dismissal flag.

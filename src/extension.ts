@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as crypto from 'crypto';
 import { exec } from 'child_process';
 import {
@@ -13,6 +14,7 @@ import {
   unregisterTerminal,
   rekeyTerminal,
   hashOf,
+  statusDir,
 } from './provider';
 
 const SHELL = process.env.SHELL || '/bin/bash';
@@ -501,6 +503,223 @@ async function restart(provider: DtachTreeProvider, session: DtachSession): Prom
   provider.refresh();
 }
 
+// --- Claude status hooks ------------------------------------------------------
+//
+// The status feature shows each session's live Claude run-state on its row. A
+// bundled python3 forwarder, registered as a Claude hook, walks /proc to the
+// dtach master and writes per-hash status files the provider reads. See
+// scripts/claude-status-hook.py and the provider's readStatuses/statusLabel.
+
+const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const CLAUDE_SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
+// Stable install location for the forwarder, independent of the versioned
+// extension dir so an update can't break the wiring in ~/.claude/settings.json.
+const HOOK_PATH = path.join(os.homedir(), '.dtach-sessions', 'hook');
+const HOOK_EVENTS = [
+  'SessionStart',
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PostToolUse',
+  'Notification',
+  'Stop',
+  'SessionEnd',
+];
+const NUDGE_DISMISSED_KEY = 'dtachSessions.claudeNudgeDismissed';
+
+/** The forwarder's installed extension path; set on activate. */
+let extensionPath = '';
+
+/** The command string registered for a Claude event. The HOOK_PATH substring is
+ * how we recognise our own entries for idempotent install and surgical uninstall. */
+function hookCommand(event: string): string {
+  return `python3 ${shellEscape(HOOK_PATH)} ${event}`;
+}
+
+function isOurHook(h: unknown): boolean {
+  return (
+    typeof (h as { command?: unknown })?.command === 'string' &&
+    (h as { command: string }).command.includes(HOOK_PATH)
+  );
+}
+
+/** Read ~/.claude/settings.json as an object; {} if absent. Throws on invalid JSON. */
+function readClaudeSettings(): Record<string, any> {
+  if (!fs.existsSync(CLAUDE_SETTINGS)) {
+    return {};
+  }
+  const obj = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8'));
+  return obj && typeof obj === 'object' ? obj : {};
+}
+
+/** True if our forwarder is registered under any event in Claude's settings. */
+function hooksInstalled(): boolean {
+  try {
+    const hooks = readClaudeSettings().hooks;
+    if (!hooks || typeof hooks !== 'object') {
+      return false;
+    }
+    return Object.values(hooks).some(
+      (groups) =>
+        Array.isArray(groups) &&
+        groups.some((g) => Array.isArray(g?.hooks) && g.hooks.some(isOurHook))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Install command: copy the forwarder to a stable path and merge it into each
+ * Claude lifecycle event without disturbing the user's other hooks. Idempotent. */
+async function installClaudeHooks(): Promise<void> {
+  const src = path.join(extensionPath, 'scripts', 'claude-status-hook.py');
+  try {
+    fs.mkdirSync(path.dirname(HOOK_PATH), { recursive: true });
+    fs.copyFileSync(src, HOOK_PATH);
+    fs.chmodSync(HOOK_PATH, 0o755);
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `dtach Sessions: could not install the status forwarder: ${(err as Error).message}`
+    );
+    return;
+  }
+
+  let settings: Record<string, any>;
+  try {
+    settings = readClaudeSettings();
+  } catch {
+    vscode.window.showErrorMessage(
+      `dtach Sessions: ${CLAUDE_SETTINGS} is not valid JSON; aborting so your settings are not clobbered.`
+    );
+    return;
+  }
+  if (!settings.hooks || typeof settings.hooks !== 'object') {
+    settings.hooks = {};
+  }
+  for (const event of HOOK_EVENTS) {
+    const groups: any[] = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
+    const already = groups.some((g) => Array.isArray(g?.hooks) && g.hooks.some(isOurHook));
+    if (!already) {
+      // Tool-scoped events take a matcher ('*' = all tools); the rest match implicitly.
+      const entry = { type: 'command', command: hookCommand(event) };
+      groups.push(
+        event === 'PreToolUse' || event === 'PostToolUse'
+          ? { matcher: '*', hooks: [entry] }
+          : { hooks: [entry] }
+      );
+    }
+    settings.hooks[event] = groups;
+  }
+
+  try {
+    fs.mkdirSync(CLAUDE_DIR, { recursive: true });
+    fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2) + '\n');
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `dtach Sessions: could not write ${CLAUDE_SETTINGS}: ${(err as Error).message}`
+    );
+    return;
+  }
+  vscode.window.showInformationMessage(
+    'dtach Sessions: Claude status hooks installed. Sessions already running Claude will report status only after they are restarted (hooks are read at session start).'
+  );
+}
+
+/** Uninstall command: remove only our forwarder entries, leaving other hooks intact. */
+async function uninstallClaudeHooks(): Promise<void> {
+  let settings: Record<string, any>;
+  try {
+    settings = readClaudeSettings();
+  } catch {
+    vscode.window.showErrorMessage(`dtach Sessions: ${CLAUDE_SETTINGS} is not valid JSON.`);
+    return;
+  }
+  const hooks = settings.hooks;
+  if (hooks && typeof hooks === 'object') {
+    for (const event of Object.keys(hooks)) {
+      if (!Array.isArray(hooks[event])) {
+        continue;
+      }
+      const kept = hooks[event]
+        .map((g: any) =>
+          Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((h: unknown) => !isOurHook(h)) } : g
+        )
+        .filter((g: any) => !Array.isArray(g?.hooks) || g.hooks.length > 0);
+      if (kept.length) {
+        hooks[event] = kept;
+      } else {
+        delete hooks[event];
+      }
+    }
+    if (Object.keys(hooks).length === 0) {
+      delete settings.hooks;
+    }
+    try {
+      fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2) + '\n');
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `dtach Sessions: could not write ${CLAUDE_SETTINGS}: ${(err as Error).message}`
+      );
+      return;
+    }
+  }
+  fs.rmSync(HOOK_PATH, { force: true });
+  vscode.window.showInformationMessage('dtach Sessions: Claude status hooks removed.');
+}
+
+/** One-time offer to install, gated on Claude being present, hooks not already
+ * installed, and no prior dismissal (persisted per-host in globalState). */
+async function maybeNudgeInstall(context: vscode.ExtensionContext): Promise<void> {
+  if (
+    !config().showClaudeStatus ||
+    context.globalState.get<boolean>(NUDGE_DISMISSED_KEY) ||
+    !fs.existsSync(CLAUDE_DIR) || // the "this host runs Claude" signal (not PATH)
+    hooksInstalled()
+  ) {
+    return;
+  }
+  const choice = await vscode.window.showInformationMessage(
+    'dtach Sessions: show live Claude status (working / waiting / idle) on session rows?',
+    'Install',
+    'Not now',
+    "Don't ask again"
+  );
+  if (choice === 'Install') {
+    await installClaudeHooks();
+  } else if (choice === "Don't ask again") {
+    await context.globalState.update(NUDGE_DISMISSED_KEY, true);
+  }
+}
+
+/** Watch the status directory and refresh the tree as status files change. */
+function watchClaudeStatus(provider: DtachTreeProvider): vscode.Disposable | undefined {
+  if (!config().showClaudeStatus) {
+    return undefined;
+  }
+  const dir = statusDir(config().socketDir);
+  let watcher: fs.FSWatcher;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    watcher = fs.watch(dir, () => {
+      // fs.watch can fire several events per write (tmp create, rename); debounce.
+      if (statusDebounce) {
+        clearTimeout(statusDebounce);
+      }
+      statusDebounce = setTimeout(() => provider.refresh(), 150);
+    });
+  } catch {
+    return undefined;
+  }
+  return {
+    dispose: () => {
+      if (statusDebounce) {
+        clearTimeout(statusDebounce);
+      }
+      watcher.close();
+    },
+  };
+}
+let statusDebounce: ReturnType<typeof setTimeout> | undefined;
+
 /** Resolve a command argument (a tree node or session) to a DtachSession. */
 function toSession(item: SessionItem | DtachSession): DtachSession {
   return item instanceof SessionItem ? item.session : item;
@@ -508,6 +727,7 @@ function toSession(item: SessionItem | DtachSession): DtachSession {
 
 export function activate(context: vscode.ExtensionContext): void {
   mementoState = context.workspaceState;
+  extensionPath = context.extensionPath;
   const provider = new DtachTreeProvider(context.extensionUri);
   const view = vscode.window.createTreeView('dtachSessionsView', {
     treeDataProvider: provider,
@@ -566,8 +786,16 @@ export function activate(context: vscode.ExtensionContext): void {
         return killSelected(provider, selection.map(toSession));
       }
     ),
-    vscode.commands.registerCommand('dtachSessions.killAll', () => killAll(provider))
+    vscode.commands.registerCommand('dtachSessions.killAll', () => killAll(provider)),
+    vscode.commands.registerCommand('dtachSessions.installClaudeHooks', () => installClaudeHooks()),
+    vscode.commands.registerCommand('dtachSessions.uninstallClaudeHooks', () => uninstallClaudeHooks())
   );
+
+  const statusWatcher = watchClaudeStatus(provider);
+  if (statusWatcher) {
+    context.subscriptions.push(statusWatcher);
+  }
+  void maybeNudgeInstall(context);
 }
 
 export function deactivate(): void {

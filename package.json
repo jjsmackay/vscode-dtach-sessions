@@ -130,6 +130,16 @@
         "command": "dtachSessions.copyAttachCommand",
         "title": "Copy Attach Command",
         "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.installClaudeHooks",
+        "title": "Install Claude Status Hooks",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.uninstallClaudeHooks",
+        "title": "Uninstall Claude Status Hooks",
+        "category": "dtach Sessions"
       }
     ],
     "menus": {
@@ -294,6 +304,11 @@
           "type": "boolean",
           "default": true,
           "description": "When enabled, attached terminals are created without a fixed name so the running program's title drives the tab — e.g. an agent CLI's live status. The session name still labels the sidebar row. Disable to keep the session name pinned on the tab instead."
+        },
+        "dtachSessions.showClaudeStatus": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the live run-state of a Claude Code instance running inside each session (working / tool / waiting / idle) on its sidebar row. Requires the status hooks: run 'dtach Sessions: Install Claude Status Hooks'. Linux remote hosts only (the forwarder reads /proc); other hosts simply show no status."
         }
       }
     }

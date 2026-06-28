@@ -27,6 +27,7 @@ export interface DtachConfig {
   dtachPath: string;
   startupCommand: string;
   reflectProcessTitle: boolean;
+  showClaudeStatus: boolean;
 }
 
 export function config(): DtachConfig {
@@ -38,7 +39,86 @@ export function config(): DtachConfig {
     dtachPath: c.get<string>('dtachPath', 'dtach'),
     startupCommand: c.get<string>('startupCommand', ''),
     reflectProcessTitle: c.get<boolean>('reflectProcessTitle', true),
+    showClaudeStatus: c.get<boolean>('showClaudeStatus', true),
   };
+}
+
+/** Live run-state of a Claude inside a session, as written by the status hook. */
+export type SessionState = 'working' | 'tool' | 'waiting' | 'idle';
+
+export interface SessionStatus {
+  state: SessionState;
+  tool?: string;
+  ts: number; // epoch ms of the event that produced this state
+}
+
+/**
+ * A transient state (working/tool) older than this is treated as decayed: a
+ * Claude that exited without a clean Stop (crash, kill, lost connection) leaves
+ * a stale "working" file behind, and we must never present it as current.
+ * `waiting` does not decay — blocking on the user is legitimately long-lived.
+ */
+const STALE_MS = 120_000;
+
+/** The directory holding per-hash status files, beside the sockets. The hook
+ * forwarder derives the same path from the socket it finds via /proc. */
+export function statusDir(socketDir: string): string {
+  return path.join(socketDir, 'status');
+}
+
+/**
+ * Read per-hash status files written by the hook forwarder, keyed by the
+ * session hash (the file basename). The directory sits beside the sockets; a
+ * missing directory (status feature unused) yields no statuses, and a torn or
+ * malformed file is skipped rather than fatal.
+ */
+export function readStatuses(socketDir: string): Map<string, SessionStatus> {
+  const dir = statusDir(socketDir);
+  const out = new Map<string, SessionStatus>();
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const f of entries) {
+    if (!f.endsWith('.json')) {
+      continue;
+    }
+    try {
+      const obj = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      if (obj && typeof obj.state === 'string' && typeof obj.ts === 'number') {
+        out.set(f.slice(0, -'.json'.length), { state: obj.state, tool: obj.tool, ts: obj.ts });
+      }
+    } catch {
+      // partial read mid-rename, or hand-edited garbage — ignore this file
+    }
+  }
+  return out;
+}
+
+/**
+ * The row badge for a status, or undefined when nothing should be shown (no
+ * status, idle, or a decayed transient state — age alone then stands in).
+ */
+export function statusLabel(status: SessionStatus | undefined): string | undefined {
+  if (!status) {
+    return undefined;
+  }
+  const { state, tool, ts } = status;
+  if ((state === 'working' || state === 'tool') && Date.now() - ts > STALE_MS) {
+    return undefined;
+  }
+  switch (state) {
+    case 'working':
+      return 'working';
+    case 'tool':
+      return tool ? `tool: ${tool}` : 'tool';
+    case 'waiting':
+      return 'waiting';
+    default:
+      return undefined; // idle — the relative age already conveys quietness
+  }
 }
 
 /**
@@ -154,7 +234,7 @@ function relativeAge(mtimeMs: number): string {
 }
 
 export class SessionItem extends vscode.TreeItem {
-  constructor(public readonly session: DtachSession, attachedIcon?: vscode.Uri) {
+  constructor(public readonly session: DtachSession, attachedIcon?: vscode.Uri, statusBadge?: string) {
     super(session.name, vscode.TreeItemCollapsibleState.None);
     const attached = findTerminalForSocket(session) !== undefined;
     // Attach-state in the contextValue gates the per-row inline icons: detached
@@ -162,8 +242,15 @@ export class SessionItem extends vscode.TreeItem {
     // Kill match both via a `viewItem =~ /^dtachSession-/` clause.
     this.contextValue = attached ? 'dtachSession-attached' : 'dtachSession-detached';
     const age = relativeAge(session.mtimeMs);
-    this.description = attached ? `attached · ${age}` : age;
-    this.tooltip = `${session.socket}\nlast modified ${age}${attached ? '\nattached in this window' : ''}`;
+    // Carry the Claude run-state in the description (status-state), separate from
+    // contextValue (attach-state); the two compose without either suppressing
+    // the other. The badge leads so it reads at a glance.
+    const base = attached ? `attached · ${age}` : age;
+    this.description = statusBadge ? `${statusBadge} · ${base}` : base;
+    this.tooltip =
+      `${session.socket}\nlast modified ${age}` +
+      `${attached ? '\nattached in this window' : ''}` +
+      `${statusBadge ? `\nclaude: ${statusBadge}` : ''}`;
     // Mark sessions attached in this window with a green terminal icon so the list
     // reads as a live dashboard. Use a baked-green SVG rather than a codicon +
     // ThemeColor: VS Code recolours codicons to the selection foreground when the
@@ -200,7 +287,16 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
   }
 
   getChildren(): SessionItem[] {
-    return this.listSessions().map((s) => new SessionItem(s, this.attachedIcon));
+    const cfg = config();
+    const statuses = cfg.showClaudeStatus ? readStatuses(cfg.socketDir) : undefined;
+    return this.listSessions().map((s) => {
+      let badge: string | undefined;
+      if (statuses) {
+        const hash = hashOf(path.basename(s.socket));
+        badge = hash ? statusLabel(statuses.get(hash)) : undefined;
+      }
+      return new SessionItem(s, this.attachedIcon, badge);
+    });
   }
 
   /**
