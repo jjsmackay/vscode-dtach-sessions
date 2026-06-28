@@ -221,12 +221,11 @@ async function rename(provider: DtachTreeProvider, session: DtachSession): Promi
   // VS Code has no terminal-rename API; dispose and reattach under the new name.
   if (term) {
     term.dispose();
-    const t = vscode.window.createTerminal({
-      name: newName,
-      shellPath: dtachPath,
-      shellArgs: ['-a', newSocket, ...redrawArgs(redrawMethod)],
-    });
-    t.show();
+    showOrCreateTerminal(
+      { name: newName, socket: newSocket },
+      ['-a', newSocket, ...redrawArgs(redrawMethod)],
+      dtachPath
+    );
   }
   provider.refresh();
 }

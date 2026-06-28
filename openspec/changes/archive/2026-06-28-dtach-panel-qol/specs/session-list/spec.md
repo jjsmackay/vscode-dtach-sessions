@@ -1,10 +1,4 @@
-# session-list Specification
-
-## Purpose
-
-Discovering dtach sockets on the host and rendering them as a sidebar tree view, kept current through manual refresh and automatic refresh on visibility and after create.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Socket discovery
 The extension SHALL read the configured socket directory (default `~/.dtach-sessions`) and return all entries whose names end with `.dtach`, start with the configured prefix (`socketPrefix`), and are sockets (`fs.statSync(entry).isSocket()`). The prefix SHALL default to empty (`""`), so that the `.dtach` suffix plus the socket-type check are the discriminator and the dedicated directory acts as the namespace. The directory path SHALL be resolved by expanding a leading `~` to `os.homedir()`.
@@ -56,26 +50,7 @@ The extension SHALL render the session list in a dedicated VS Code activity-bar 
 - **WHEN** the socket basename is `web.dtach` (no `_<hash>` segment)
 - **THEN** the tree item label is `web` (only the prefix and `.dtach` stripped)
 
-### Requirement: Manual refresh
-The extension SHALL provide a refresh button in the view title bar. Activating it SHALL re-read the socket directory and update the tree.
-
-#### Scenario: Refresh after new socket appears
-- **WHEN** a new `.dtach` socket is created externally and the user clicks Refresh
-- **THEN** the new session appears in the tree
-
-### Requirement: Auto-refresh on visibility
-The extension SHALL re-read the socket directory and update the tree when the view becomes visible (`onDidChangeVisibility`), so sessions created outside the extension appear without a manual refresh.
-
-#### Scenario: Externally-created session appears on view focus
-- **WHEN** a new `.dtach` socket is created outside the extension and the user switches to the view
-- **THEN** the tree refreshes and the new session appears without clicking Refresh
-
-### Requirement: Auto-refresh after create
-After the create command launches a session, the extension SHALL poll for the socket file (which dtach writes asynchronously) and refresh the tree once it appears, so a newly created session shows without a manual refresh. It SHALL stop polling and refresh after a bounded timeout if the socket never appears.
-
-#### Scenario: Created session appears without manual refresh
-- **WHEN** the user creates a session and dtach writes the socket shortly after the terminal opens
-- **THEN** the tree refreshes automatically once the socket exists and the session appears
+## ADDED Requirements
 
 ### Requirement: Welcome empty-state
 When the session list is empty, the view SHALL display a welcome empty-state (a `viewsWelcome` contribution) with explanatory text and a button that invokes the create command, rather than a blank panel.
