@@ -1,9 +1,9 @@
-# dtach Sessions
+# >_ dtach Sessions
 
 A minimal VS Code extension that lists [dtach](https://github.com/crigler/dtach)
 sessions in a sidebar and attaches to them in ordinary integrated terminals.
 Because dtach is pure passthrough, native terminal select, copy, scroll, and
-search all keep working — there is no webview or PTY proxy.
+search all keep working. There's no webview or PTY proxy.
 
 Built for the Remote-SSH workflow: the extension runs on the **remote** extension
 host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
@@ -30,8 +30,8 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
   The `-r winch` forces a redraw so a live TUI renders immediately. Clicking a
   session that already has an open terminal focuses it instead of opening a second.
   By default (`dtachSessions.reflectProcessTitle`) the terminal is created without
-  a fixed name so the running program's title drives the tab — e.g. an agent CLI's
-  live status — while the session name labels the sidebar row. Until the program
+  a fixed name so the running program's title drives the tab (e.g. an agent CLI's
+  live status), while the session name labels the sidebar row. Until the program
   sets its own title, the tab falls back to the session name (dtach is launched
   with that as its process label via `argv[0]`). Set the option to `false` to pin
   the session name on the tab instead. See the title note below for limits.
@@ -48,7 +48,7 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
 - **Switch Session** — a command-palette command (`dtach Sessions: Switch Session`)
   to fuzzy-find and attach a session without leaving the keyboard.
 - **Rename** — right-click a row → Rename. Moves the socket (keeping its id) and
-  relabels the open terminal. The live session is preserved.
+  relabels the open terminal. The live session survives.
 - **Detach / Attach** — each row carries an inline icon for its primary action:
   attached rows show a blue **pause** (detach — close this window's terminal,
   leave the dtach server running); detached rows show a **play** (attach). The
@@ -124,7 +124,7 @@ remote window.
 4. Right-click `web` → Rename → `api`: the socket becomes `api_<hash>.dtach`, the
    row and terminal relabel, and the session stays live.
 5. Right-click `api` → Kill → process gone (verify with `pgrep -f _<hash>.dtach`)
-   and socket removed — renaming did not orphan it.
+   and socket removed; renaming did not orphan it.
 6. Reopen the remote window, click a session → it is still there and reattaches.
 7. Select several rows → Kill, or use Kill All from the `…` menu → all gone.
 8. Drag-select and right-click-copy work natively in the attached terminal.

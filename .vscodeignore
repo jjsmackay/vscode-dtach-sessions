@@ -5,6 +5,8 @@ openspec/**
 .git/**
 .gitignore
 .claude/**
+CLAUDE.md
+media/logo.svg
 tsconfig.json
 **/*.ts
 **/*.map
