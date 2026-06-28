@@ -1,10 +1,36 @@
 {
   "name": "dtach-sessions",
   "displayName": "dtach Sessions",
-  "description": "List and attach to dtach sessions from a VS Code sidebar.",
+  "description": "Persistent terminal sessions in a sidebar — attach and reattach to dtach sessions that survive disconnects and window reloads. A lightweight tmux/screen alternative for Remote-SSH. Keep a long-running CLI — like a Claude or other coding agent — alive across disconnects.",
   "version": "0.1.5",
+  "icon": "media/logo.png",
   "publisher": "CleverMonkey",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jjsmackay/vscode-dtach-sessions.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jjsmackay/vscode-dtach-sessions/issues"
+  },
+  "homepage": "https://github.com/jjsmackay/vscode-dtach-sessions#readme",
+  "keywords": [
+    "persistent",
+    "terminal",
+    "tmux",
+    "screen",
+    "dtach",
+    "session",
+    "persist",
+    "remote",
+    "ssh",
+    "detach",
+    "reattach",
+    "background",
+    "claude",
+    "agent",
+    "ai"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
