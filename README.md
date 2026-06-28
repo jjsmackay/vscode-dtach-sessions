@@ -68,10 +68,14 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
   cleanly rather than orphaned.
 - **Live Claude status** — each row shows the run-state of a Claude Code instance
   running inside it: **working**, **tool: `<name>`**, or **waiting** (blocked on
-  you); idle sessions just show their age. Run **dtach Sessions: Install Claude
-  Status Hooks** once (or accept the one-time prompt) to wire a small forwarder
-  into `~/.claude/settings.json`; it merges alongside any hooks you already have,
-  and **Uninstall Claude Status Hooks** removes only its entries. Sessions already
+  you); idle sessions just show their age. The row **icon** reflects it too — a
+  spinner while busy, an amber bell when waiting on you, the usual terminal icon
+  at rest — and the row's relative time becomes **activity-relative** (time in
+  state / since Claude last acted) whenever status is available, instead of the
+  socket's mtime. Run **dtach Sessions: Install Claude Status Hooks** once (or
+  accept the one-time prompt) to wire a small forwarder into
+  `~/.claude/settings.json`; it merges alongside any hooks you already have, and
+  **Uninstall Claude Status Hooks** removes only its entries. Sessions already
   running Claude pick up status after a restart, since Claude reads hooks at
   session start. See the status note below. Linux hosts only.
 

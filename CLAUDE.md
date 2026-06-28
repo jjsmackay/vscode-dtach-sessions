@@ -83,3 +83,13 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
   install **nudge** is gated on `~/.claude/` existing (the "runs Claude" signal —
   PATH is unreliable on the extension host) + not-installed + a `globalState`
   dismissal flag.
+- Status presentation derives from one `effectiveState(status)` (decay applied
+  once) so the badge, icon, and time can't disagree. Icon: `loading~spin`
+  codicon for working/tool (motion is the cue, so the codicon-colour wash on
+  selection is moot — that's *why* a spinner works where a coloured codicon
+  wouldn't); baked amber bell `media/state-waiting.svg` for waiting (colour IS
+  the signal, so it must be a baked SVG like `terminal-green.svg`); the
+  attached/plain terminal icon at rest. The row's relative time is
+  `relativeAge(status.ts)` when a status exists (activity-relative — tracks the
+  agent), falling back to socket `mtimeMs` otherwise; the tooltip keeps the
+  honest mtime "last modified".

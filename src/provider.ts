@@ -98,17 +98,26 @@ export function readStatuses(socketDir: string): Map<string, SessionStatus> {
 }
 
 /**
- * The row badge for a status, or undefined when nothing should be shown (no
- * status, idle, or a decayed transient state — age alone then stands in).
+ * The state to present after staleness decay, or undefined when nothing should
+ * be shown: no status, idle (age alone conveys quietness), or a transient state
+ * (working/tool) that has gone stale. The single source the badge AND the icon
+ * derive from, so they can never disagree.
  */
-export function statusLabel(status: SessionStatus | undefined): string | undefined {
+export function effectiveState(status: SessionStatus | undefined): SessionState | undefined {
   if (!status) {
     return undefined;
   }
-  const { state, tool, ts } = status;
+  const { state, ts } = status;
   if ((state === 'working' || state === 'tool') && Date.now() - ts > STALE_MS) {
     return undefined;
   }
+  return state === 'idle' ? undefined : state;
+}
+
+/** The badge text for an already-decayed state, or undefined for none. Split
+ *  from `statusLabel` so a caller that already has the effective state (e.g.
+ *  `SessionItem`, which also needs it for the icon) need not recompute it. */
+function labelForState(state: SessionState | undefined, tool?: string): string | undefined {
   switch (state) {
     case 'working':
       return 'working';
@@ -117,8 +126,13 @@ export function statusLabel(status: SessionStatus | undefined): string | undefin
     case 'waiting':
       return 'waiting';
     default:
-      return undefined; // idle — the relative age already conveys quietness
+      return undefined;
   }
+}
+
+/** The row badge for a status, or undefined when no badge should show. */
+export function statusLabel(status: SessionStatus | undefined): string | undefined {
+  return labelForState(effectiveState(status), status?.tool);
 }
 
 /**
@@ -233,32 +247,61 @@ function relativeAge(mtimeMs: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** Pre-coloured row icons resolved from the extension's media dir. */
+export interface SessionIcons {
+  attached?: vscode.Uri; // green terminal (attached, at rest)
+  waiting?: vscode.Uri; // amber bell (Claude blocked on the user)
+}
+
 export class SessionItem extends vscode.TreeItem {
-  constructor(public readonly session: DtachSession, attachedIcon?: vscode.Uri, statusBadge?: string) {
+  constructor(public readonly session: DtachSession, icons?: SessionIcons, status?: SessionStatus) {
     super(session.name, vscode.TreeItemCollapsibleState.None);
     const attached = findTerminalForSocket(session) !== undefined;
     // Attach-state in the contextValue gates the per-row inline icons: detached
     // rows show play (attach), attached rows show pause (detach). Restart and
     // Kill match both via a `viewItem =~ /^dtachSession-/` clause.
     this.contextValue = attached ? 'dtachSession-attached' : 'dtachSession-detached';
-    const age = relativeAge(session.mtimeMs);
-    // Carry the Claude run-state in the description (status-state), separate from
+
+    const state = effectiveState(status); // one decay pass, shared by badge + icon
+    const badge = labelForState(state, status?.tool);
+    const mtimeAge = relativeAge(session.mtimeMs);
+    // The trailing time is activity-relative when a status exists — measured from
+    // the last hook event, so it tracks what Claude is doing — and falls back to
+    // the socket mtime otherwise (the socket's mtime moves on attach/detach, not
+    // on agent activity). This keys on the status *existing*, not on `state`: a
+    // decayed status (idle, or stale working) still has a meaningful ts (time
+    // since Claude last acted), so we keep using it. The tooltip keeps the honest
+    // "last modified" mtime.
+    const shownAge = status ? relativeAge(status.ts) : mtimeAge;
+    // Run-state badge in the description (status-state), separate from
     // contextValue (attach-state); the two compose without either suppressing
     // the other. The badge leads so it reads at a glance.
-    const base = attached ? `attached · ${age}` : age;
-    this.description = statusBadge ? `${statusBadge} · ${base}` : base;
+    const base = attached ? `attached · ${shownAge}` : shownAge;
+    this.description = badge ? `${badge} · ${base}` : base;
     this.tooltip =
-      `${session.socket}\nlast modified ${age}` +
+      `${session.socket}\nlast modified ${mtimeAge}` +
       `${attached ? '\nattached in this window' : ''}` +
-      `${statusBadge ? `\nclaude: ${statusBadge}` : ''}`;
-    // Mark sessions attached in this window with a green terminal icon so the list
-    // reads as a live dashboard. Use a baked-green SVG rather than a codicon +
-    // ThemeColor: VS Code recolours codicons to the selection foreground when the
-    // row is selected, which would wash the green out; an image icon keeps its
-    // colour in selected and inactive-selected states.
-    this.iconPath = attached
-      ? attachedIcon ?? new vscode.ThemeIcon('terminal', new vscode.ThemeColor('charts.green'))
-      : new vscode.ThemeIcon('terminal');
+      `${badge ? `\nclaude: ${badge}` : ''}`;
+
+    // Icon by effective run-state: a spinner for busy (motion is the cue, so the
+    // codicon-colour wash on selection is moot here), a baked amber bell for
+    // waiting (where colour IS the signal and must survive selection — same
+    // reason the attached green is a baked SVG, not a recoloured codicon), and
+    // the attached/detached terminal icon at rest.
+    switch (state) {
+      case 'working':
+      case 'tool':
+        this.iconPath = new vscode.ThemeIcon('loading~spin');
+        break;
+      case 'waiting':
+        this.iconPath =
+          icons?.waiting ?? new vscode.ThemeIcon('bell', new vscode.ThemeColor('charts.yellow'));
+        break;
+      default:
+        this.iconPath = attached
+          ? icons?.attached ?? new vscode.ThemeIcon('terminal', new vscode.ThemeColor('charts.green'))
+          : new vscode.ThemeIcon('terminal');
+    }
     this.command = {
       command: 'dtachSessions.attach',
       title: 'Attach',
@@ -270,12 +313,15 @@ export class SessionItem extends vscode.TreeItem {
 export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
-  private readonly attachedIcon?: vscode.Uri;
+  private readonly icons: SessionIcons;
 
   constructor(extensionUri?: vscode.Uri) {
-    this.attachedIcon = extensionUri
-      ? vscode.Uri.joinPath(extensionUri, 'media', 'terminal-green.svg')
-      : undefined;
+    this.icons = extensionUri
+      ? {
+          attached: vscode.Uri.joinPath(extensionUri, 'media', 'terminal-green.svg'),
+          waiting: vscode.Uri.joinPath(extensionUri, 'media', 'state-waiting.svg'),
+        }
+      : {};
   }
 
   refresh(): void {
@@ -290,12 +336,12 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
     const cfg = config();
     const statuses = cfg.showClaudeStatus ? readStatuses(cfg.socketDir) : undefined;
     return this.listSessions().map((s) => {
-      let badge: string | undefined;
+      let status: SessionStatus | undefined;
       if (statuses) {
         const hash = hashOf(path.basename(s.socket));
-        badge = hash ? statusLabel(statuses.get(hash)) : undefined;
+        status = hash ? statuses.get(hash) : undefined;
       }
-      return new SessionItem(s, this.attachedIcon, badge);
+      return new SessionItem(s, this.icons, status);
     });
   }
 
