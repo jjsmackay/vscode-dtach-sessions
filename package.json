@@ -2,7 +2,7 @@
   "name": "dtach-sessions",
   "displayName": "dtach Sessions",
   "description": "List and attach to dtach sessions from a VS Code sidebar.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "CleverMonkey",
   "license": "MIT",
   "engines": {
