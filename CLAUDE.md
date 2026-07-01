@@ -30,6 +30,10 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
 - Feature work is spec-first via **OpenSpec**: proposals/specs/tasks live in
   `openspec/changes/<change>/`. Use the `opsx:*` skills (propose/apply/archive).
 - Git: branch session work, squash-merge onto the feature branch before upstream.
+- **One commit per change on `main`.** Each archived OpenSpec change lands as a
+  single squashed commit (subject = the change's headline, `openspec: <change>`
+  footer folding in its propose/impl/refactor/archive steps). `chore(release)`
+  bumps stay as standalone commits so version boundaries remain legible.
 
 ## Gotchas
 - The extension host does **not** source `.bashrc` — `dtach` may not be on PATH;
