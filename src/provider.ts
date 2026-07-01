@@ -45,8 +45,11 @@ export function config(): DtachConfig {
   };
 }
 
-/** Live run-state of a Claude inside a session, as written by the status hook. */
-export type SessionState = 'working' | 'tool' | 'waiting' | 'idle';
+/** Live run-state of a Claude inside a session, as written by the status hook.
+ * `done` is the calm "finished — your move" resting state written on Stop;
+ * unlike `working`/`tool` it does not decay, and unlike `waiting` it is not a
+ * block — it persists until the session next leaves it. */
+export type SessionState = 'working' | 'tool' | 'waiting' | 'idle' | 'done';
 
 export interface SessionStatus {
   state: SessionState;
@@ -58,7 +61,8 @@ export interface SessionStatus {
  * A transient state (working/tool) older than this is treated as decayed: a
  * Claude that exited without a clean Stop (crash, kill, lost connection) leaves
  * a stale "working" file behind, and we must never present it as current.
- * `waiting` does not decay — blocking on the user is legitimately long-lived.
+ * `waiting` and `done` do not decay — a block on the user, and a finished turn
+ * awaiting the user, are both legitimately long-lived resting states.
  */
 const STALE_MS = 120_000;
 
@@ -111,8 +115,9 @@ export function readStatuses(socketDir: string): Map<string, SessionStatus> {
 /**
  * The state to present after staleness decay, or undefined when nothing should
  * be shown: no status, idle (age alone conveys quietness), or a transient state
- * (working/tool) that has gone stale. The single source the badge AND the icon
- * derive from, so they can never disagree.
+ * (working/tool) that has gone stale. `waiting` and `done` are shown as-is and
+ * never decay. The single source the badge AND the icon derive from, so they
+ * can never disagree.
  */
 export function effectiveState(status: SessionStatus | undefined): SessionState | undefined {
   if (!status) {
@@ -136,6 +141,8 @@ function labelForState(state: SessionState | undefined, tool?: string): string |
       return tool ? `tool: ${tool}` : 'tool';
     case 'waiting':
       return 'waiting';
+    case 'done':
+      return 'done';
     default:
       return undefined;
   }
@@ -264,6 +271,54 @@ export interface SessionIcons {
   waiting?: vscode.Uri; // amber bell (Claude blocked on the user)
 }
 
+/**
+ * A per-row synthetic URI used *only* as a `FileDecoration` key (VS Code keys
+ * decorations off `TreeItem.resourceUri`). The scheme is deliberately fake: a
+ * real socket path here would hijack label/icon derivation (VS Code would apply
+ * the file-icon theme and filename). Keyed on the rename-invariant hash, or the
+ * socket basename for legacy hashless sockets.
+ */
+export function sessionResourceUri(session: { socket: string }): vscode.Uri {
+  const base = path.basename(session.socket);
+  return vscode.Uri.from({ scheme: 'dtach-session', path: '/' + (hashOf(base) ?? base) });
+}
+
+/**
+ * Dims detached session rows: a `FileDecorationProvider` returning a muted
+ * `color` for rows whose session is not attached in this window. It tints the
+ * label only (never `iconPath`), so a detached session that needs the user keeps
+ * its full-strength run-state icon (e.g. the amber bell) on a dimmed name —
+ * making attach-state an always-present row treatment, independent of the icon.
+ * Attach detection reuses `findTerminalForSocket` (the pid-registry-backed path),
+ * so dimming survives a window reload the same way the icon does.
+ */
+export class DetachedRowDecorations implements vscode.FileDecorationProvider {
+  private readonly _onDidChange = new vscode.EventEmitter<undefined>();
+  readonly onDidChangeFileDecorations = this._onDidChange.event;
+  private sessions = new Map<string, { name: string; socket: string }>();
+
+  /** Re-key the uri→session map from the current rows and notify VS Code to
+   *  re-query the decorations (attach-state may have changed). Called on each
+   *  tree refresh, riding the same signal as the row icons. Firing `undefined`
+   *  means "refresh all" — VS Code re-queries only the rows it currently shows,
+   *  so there is no need to enumerate the changed URIs. */
+  sync(sessions: { name: string; socket: string }[]): void {
+    this.sessions = new Map(sessions.map((s) => [sessionResourceUri(s).toString(), s]));
+    this._onDidChange.fire(undefined);
+  }
+
+  provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    if (uri.scheme !== 'dtach-session') {
+      return undefined; // cheap bail: VS Code queries this for every decorated uri
+    }
+    const session = this.sessions.get(uri.toString());
+    if (!session || findTerminalForSocket(session) !== undefined) {
+      return undefined; // unknown row, or attached in this window → full strength
+    }
+    return new vscode.FileDecoration(undefined, undefined, new vscode.ThemeColor('disabledForeground'));
+  }
+}
+
 export class SessionItem extends vscode.TreeItem {
   constructor(public readonly session: DtachSession, icons?: SessionIcons, status?: SessionStatus) {
     super(session.name, vscode.TreeItemCollapsibleState.None);
@@ -272,6 +327,9 @@ export class SessionItem extends vscode.TreeItem {
     // rows show play (attach), attached rows show pause (detach). Restart and
     // Kill match both via a `viewItem =~ /^dtachSession-/` clause.
     this.contextValue = attached ? 'dtachSession-attached' : 'dtachSession-detached';
+    // Synthetic key for the detached-row dimming decoration (see
+    // DetachedRowDecorations). A fake scheme, so it never drives label/icon.
+    this.resourceUri = sessionResourceUri(session);
 
     const state = effectiveState(status); // one decay pass, shared by badge + icon
     const badge = labelForState(state, status?.tool);
@@ -297,7 +355,9 @@ export class SessionItem extends vscode.TreeItem {
     // Icon by effective run-state: a spinner for busy (motion is the cue, so the
     // codicon-colour wash on selection is moot here), a baked amber bell for
     // waiting (where colour IS the signal and must survive selection — same
-    // reason the attached green is a baked SVG, not a recoloured codicon), and
+    // reason the attached green is a baked SVG, not a recoloured codicon), a
+    // green check for done (a check's meaning rides on its shape, so the
+    // colour-wash on selection is acceptable and a themed codicon suffices), and
     // the attached/detached terminal icon at rest.
     switch (state) {
       case 'working':
@@ -307,6 +367,9 @@ export class SessionItem extends vscode.TreeItem {
       case 'waiting':
         this.iconPath =
           icons?.waiting ?? new vscode.ThemeIcon('bell', new vscode.ThemeColor('charts.yellow'));
+        break;
+      case 'done':
+        this.iconPath = new vscode.ThemeIcon('check', new vscode.ThemeColor('charts.green'));
         break;
       default:
         this.iconPath = attached
@@ -326,7 +389,7 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
   private readonly icons: SessionIcons;
 
-  constructor(extensionUri?: vscode.Uri) {
+  constructor(extensionUri?: vscode.Uri, private readonly decorations?: DetachedRowDecorations) {
     this.icons = extensionUri
       ? {
           attached: vscode.Uri.joinPath(extensionUri, 'media', 'terminal-green.svg'),
@@ -363,9 +426,11 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
   }
 
   getChildren(): SessionItem[] {
-    return this.sessionsWithStatus().map(
-      ({ session, status }) => new SessionItem(session, this.icons, status)
-    );
+    const rows = this.sessionsWithStatus();
+    // Re-evaluate detached-row dimming on the same signal as the rows, so
+    // attach/detach/reload updates the dim without a manual refresh.
+    this.decorations?.sync(rows.map(({ session }) => session));
+    return rows.map(({ session, status }) => new SessionItem(session, this.icons, status));
   }
 
   /**

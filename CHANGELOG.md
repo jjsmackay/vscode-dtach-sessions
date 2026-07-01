@@ -5,6 +5,29 @@ All notable changes to the **dtach Sessions** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-07-02
+
+### Added
+
+- **`done` run-state.** When a Claude finishes its turn and hands back to you,
+  its row now shows a calm green check and a "done" badge — "finished, your
+  move" — instead of rendering as nothing. The state persists until the session
+  is next prompted (it does not decay on age).
+- **Detached rows are dimmed.** A session that is not attached in this window
+  has its row label dimmed, so attach-state is always legible — even when a
+  run-state icon (spinner, bell, check) owns the row icon. The run-state icon
+  itself stays full-strength, so a dim row with a bright amber bell reads as
+  "dormant session that needs you".
+
+### Changed
+
+- **The amber "waiting" bell now means a genuine permission block only.** The
+  status forwarder classifies Claude's `Notification` events by subtype: a
+  permission request rings the bell; an idle prompt (which auto-fires ~60s after
+  a finished turn) no longer does. The activity-bar waiting badge likewise counts
+  only genuinely blocked sessions. *(Requires re-running "Install Claude Hooks"
+  to pick up the updated forwarder.)*
+
 ## [0.3.1] - 2026-07-02
 
 ### Added

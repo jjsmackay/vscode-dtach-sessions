@@ -23,15 +23,40 @@ import time
 HASH_RE = re.compile(r"_([0-9a-f]{6})\.dtach$")
 
 # Claude lifecycle event -> session run-state. SessionEnd is handled specially
-# (it removes the status file). Unlisted events are ignored.
+# (it removes the status file) and Notification is classified by subtype (see
+# resolve()); unlisted events are ignored.
 STATE = {
     "SessionStart": "idle",
     "UserPromptSubmit": "working",
     "PreToolUse": "tool",
     "PostToolUse": "working",
-    "Notification": "waiting",
-    "Stop": "idle",
+    "Stop": "done",
 }
+
+
+def resolve(event, payload):
+    """Map a lifecycle event (+ parsed stdin payload) to the status-file record
+    to write (sans timestamp), or None to leave the status file untouched. The
+    record's shape mirrors the output 1:1 — the ``tool`` key is present only for
+    the tool state — so the write rule lives here, not split into main().
+
+    Notification is classified by its ``notification_type``: only a genuine
+    ``permission_prompt`` (Claude blocked awaiting a tool-permission decision)
+    raises ``waiting`` (the amber bell). ``idle_prompt`` — which auto-fires ~60s
+    after Stop when the user simply has not replied yet — and every other subtype
+    leave the recorded state unchanged, so a finished session stays ``done`` and
+    the bell keeps meaning "needs you".
+    """
+    if event == "Notification":
+        if payload.get("notification_type") == "permission_prompt":
+            return {"state": "waiting"}
+        return None
+    state = STATE.get(event)
+    if state is None:
+        return None
+    if state == "tool":
+        return {"state": "tool", "tool": payload.get("tool_name") or ""}
+    return {"state": state}
 
 
 def ppid_of(pid):
@@ -82,16 +107,15 @@ def main():
             pass
         return
 
-    state = STATE.get(event)
-    if state is None:
-        return
+    try:
+        payload = json.load(sys.stdin) or {}
+    except (ValueError, OSError):
+        payload = {}
 
-    rec = {"state": state, "ts": int(time.time() * 1000)}
-    if state == "tool":
-        try:
-            rec["tool"] = (json.load(sys.stdin) or {}).get("tool_name") or ""
-        except (ValueError, OSError):
-            rec["tool"] = ""
+    rec = resolve(event, payload)
+    if rec is None:
+        return  # unmapped event, or a Notification subtype that must not escalate
+    rec["ts"] = int(time.time() * 1000)
 
     try:
         os.makedirs(status_dir, exist_ok=True)

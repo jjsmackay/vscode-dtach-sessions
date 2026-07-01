@@ -131,10 +131,18 @@ extensions do) — orthogonal and out of scope; row-level legibility is the ask.
 
 ## Open Questions
 
-- How does the forwarder learn the `Notification` subtype — stdin payload field
-  (name?) or per-matcher `settings.json` registration? (Gates D1's install path.)
+- ~~How does the forwarder learn the `Notification` subtype?~~ **Resolved.** The
+  `Notification` hook's stdin JSON carries a dedicated **`notification_type`**
+  field (values include `permission_prompt`, `idle_prompt`, `auth_success`,
+  `elicitation_*`). Mechanism (a) from D1 applies: the forwarder reads the field
+  from stdin — **single registration, no per-matcher entries, no change to the
+  idempotent install / surgical uninstall** (settles task 1.3). Only
+  `permission_prompt` raises `waiting`; `idle_prompt` and all other subtypes
+  leave the recorded state unchanged.
 - Does `idle_prompt` fire at all for a Claude CLI inside a VS Code integrated
-  terminal? (Determines whether D1 changes observable behaviour on our hosts or
-  is a correctness hardening only.)
+  terminal? **Still empirical — to confirm on real hardware** (task 1.2). Not a
+  blocker: the mapping is correct either way — if `idle_prompt` never fires here,
+  the bell was already permission-only and `done`-on-`Stop` carries the resting
+  state on its own; if it does fire, it is now correctly suppressed.
 - Does the washed `$(check)` read acceptably on a selected row, or is a baked
-  SVG warranted after all? (Eyeball during verification.)
+  SVG warranted after all? (Eyeball during verification — handed to the user.)

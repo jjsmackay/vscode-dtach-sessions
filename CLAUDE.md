@@ -103,17 +103,43 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
   cheap no-op. Status is carried in the row **description**, separate from the
   `contextValue` attach-state split above — run-state and attach-state compose
   on a row without either suppressing the other. Provider decays stale
-  `working`/`tool` (not `waiting`) to age so a crashed Claude doesn't stick. The
-  install **nudge** is gated on `~/.claude/` existing (the "runs Claude" signal —
-  PATH is unreliable on the extension host) + not-installed + a `globalState`
-  dismissal flag.
+  `working`/`tool` (not `waiting`/`done`) to age so a crashed Claude doesn't
+  stick. The install **nudge** is gated on `~/.claude/` existing (the "runs
+  Claude" signal — PATH is unreliable on the extension host) + not-installed + a
+  `globalState` dismissal flag.
+- The forwarder's event→state decision lives in one pure `resolve(event,
+  payload)` (testable without `/proc`): `Stop`→`done`, `SessionStart`→`idle`,
+  prompts/tool as before. **`Notification` is classified by its stdin
+  `notification_type`** — only `permission_prompt` raises `waiting` (the amber
+  bell); `idle_prompt` (auto-fires ~60s after a finished turn) and every other
+  subtype return `None`, leaving the recorded state untouched so a finished
+  session stays `done`. This keeps the bell = "genuinely blocked", so the
+  activity-bar waiting count is trustworthy. Reads the subtype from the stdin
+  payload (single hook registration — no per-matcher entries, so install/
+  uninstall are unchanged). An extension upgrade needs **Install Claude Hooks
+  re-run** to copy the new forwarder to `~/.dtach-sessions/hook`.
 - Status presentation derives from one `effectiveState(status)` (decay applied
   once) so the badge, icon, and time can't disagree. Icon: `loading~spin`
   codicon for working/tool (motion is the cue, so the codicon-colour wash on
   selection is moot — that's *why* a spinner works where a coloured codicon
   wouldn't); baked amber bell `media/state-waiting.svg` for waiting (colour IS
-  the signal, so it must be a baked SVG like `terminal-green.svg`); the
-  attached/plain terminal icon at rest. The row's relative time is
+  the signal, so it must be a baked SVG like `terminal-green.svg`); `$(check)`
+  themed codicon (charts.green) for `done` — here colour is *not* load-bearing
+  (a check's meaning rides on its shape), so a themed codicon is fine despite the
+  selection wash, keeping `media/` lean; the attached/plain terminal icon at
+  rest. `waiting` and `done` don't decay (both are legitimate resting states —
+  `done` persists until the next prompt). The row's relative time is
   `relativeAge(status.ts)` when a status exists (activity-relative — tracks the
   agent), falling back to socket `mtimeMs` otherwise; the tooltip keeps the
   honest mtime "last modified".
+- Detached rows are dimmed via a `FileDecorationProvider`
+  (`DetachedRowDecorations`), **not** a `TreeItem` treatment (VS Code has none):
+  it tints the row **label** only and leaves `iconPath` untouched — so a detached
+  session that needs you keeps its full-strength amber bell on a dimmed name.
+  Decorations key off `TreeItem.resourceUri`, so each row gets a **synthetic**
+  `dtach-session://<hash>` URI (`sessionResourceUri`) used purely as a key — a
+  real socket path would hijack label/icon derivation (file-icon theme +
+  filename). The provider holds a uri→session map re-keyed in `getChildren` via
+  `sync()`, which fires `onDidChangeFileDecorations` for every row so dimming
+  tracks attach-state on the same refresh signal as the icons; attach detection
+  reuses `findTerminalForSocket` (pid-registry-backed), so it survives a reload.
