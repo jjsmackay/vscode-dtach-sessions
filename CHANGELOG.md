@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is next prompted (it does not decay on age).
 - **Detached rows are dimmed.** A session that is not attached in this window
   has its row label dimmed, so attach-state is always legible — even when a
-  run-state icon (spinner, bell, check) owns the row icon. The run-state icon
-  itself stays full-strength, so a dim row with a bright amber bell reads as
-  "dormant session that needs you".
+  run-state icon owns the row icon. The urgent amber waiting bell stays
+  full-strength on a dimmed row, so "dormant but needs you" stands out; the calm
+  done check is muted to match the label, keeping a finished-and-detached row
+  quiet.
 
 ### Changed
 
