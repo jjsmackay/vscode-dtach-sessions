@@ -68,6 +68,15 @@ export function statusDir(socketDir: string): string {
   return path.join(socketDir, 'status');
 }
 
+/** Remove a session's per-hash status file (best-effort; a missing file is the
+ * common case). The status subsystem owns the `<hash>.json` naming, so callers
+ * that end a session (e.g. an extension-driven kill, which never fires Claude's
+ * SessionEnd hook) express intent — "forget this session's status" — rather
+ * than reconstructing the path. */
+export function removeStatus(socketDir: string, hash: string): void {
+  fs.rmSync(path.join(statusDir(socketDir), `${hash}.json`), { force: true });
+}
+
 /**
  * Read per-hash status files written by the hook forwarder, keyed by the
  * session hash (the file basename). The directory sits beside the sockets; a
@@ -334,17 +343,42 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
     return element;
   }
 
-  getChildren(): SessionItem[] {
+  /**
+   * List sessions joined to their live status by hash, honouring
+   * `showClaudeStatus` (off ⇒ every status undefined). The single status-join
+   * pass shared by `getChildren` (row rendering) and `countWaiting` (the
+   * activity-bar badge), so the two can never disagree about a session's state.
+   */
+  private sessionsWithStatus(): { session: DtachSession; status?: SessionStatus }[] {
     const cfg = config();
     const statuses = cfg.showClaudeStatus ? readStatuses(cfg.socketDir) : undefined;
-    return this.listSessions().map((s) => {
+    return this.listSessions().map((session) => {
       let status: SessionStatus | undefined;
       if (statuses) {
-        const hash = hashOf(path.basename(s.socket));
+        const hash = hashOf(path.basename(session.socket));
         status = hash ? statuses.get(hash) : undefined;
       }
-      return new SessionItem(s, this.icons, status);
+      return { session, status };
     });
+  }
+
+  getChildren(): SessionItem[] {
+    return this.sessionsWithStatus().map(
+      ({ session, status }) => new SessionItem(session, this.icons, status)
+    );
+  }
+
+  /**
+   * Count sessions whose effective (post-decay) run-state is `waiting` — the
+   * attention figure for the activity-bar badge. Returns 0 when the status
+   * feature is off (every joined status is then undefined). Shares the join and
+   * `effectiveState` source with the per-row badge and icon, so the badge can
+   * never disagree with the rows.
+   */
+  countWaiting(): number {
+    return this.sessionsWithStatus().filter(
+      ({ status }) => effectiveState(status) === 'waiting'
+    ).length;
   }
 
   /**

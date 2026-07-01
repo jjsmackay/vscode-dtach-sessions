@@ -5,6 +5,22 @@ All notable changes to the **dtach Sessions** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-02
+
+### Added
+
+- **Attention badge on the activity-bar icon.** When one or more sessions are
+  waiting on you, the dtach Sessions icon shows a count, so a session that
+  needs your attention is visible even with the view collapsed. Only waiting
+  sessions count; the badge clears once they are resolved. Follows
+  `dtachSessions.showClaudeStatus`.
+
+### Fixed
+
+- Killing a session from the panel now also removes its leftover Claude status
+  file, so status files no longer accumulate after kills. Covers single kills,
+  multi-select, Kill All, and Restart.
+
 ## [0.3.0] - 2026-07-01
 
 ### Added

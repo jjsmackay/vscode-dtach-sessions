@@ -15,6 +15,7 @@ import {
   rekeyTerminal,
   hashOf,
   statusDir,
+  removeStatus,
 } from './provider';
 
 const SHELL = process.env.SHELL || '/bin/bash';
@@ -514,6 +515,15 @@ async function killOne(session: DtachSession): Promise<void> {
     });
   });
 
+  // Remove the session's per-hash status file. An extension-driven kill never
+  // fires Claude's SessionEnd hook, so without this the status/<hash>.json
+  // orphans. Best-effort: a missing file (no Claude ran here) is the common
+  // case; a legacy hashless socket has no status file to remove.
+  const hash = hashOf(path.basename(session.socket));
+  if (hash) {
+    removeStatus(config().socketDir, hash);
+  }
+
   // Close the now-dead terminal so a stale tab does not linger.
   findTerminalForSocket(session)?.dispose();
 }
@@ -855,6 +865,19 @@ function toSession(item: SessionItem | DtachSession): DtachSession {
   return item instanceof SessionItem ? item.session : item;
 }
 
+/**
+ * Set the activity-bar attention badge to the count of waiting sessions, so a
+ * Claude blocked on the user is visible even with the view collapsed. A zero
+ * count clears the badge. countWaiting() already returns 0 when the status
+ * feature is off, so this naturally shows nothing then.
+ */
+function updateBadge(view: vscode.TreeView<SessionItem>, provider: DtachTreeProvider): void {
+  const value = provider.countWaiting();
+  view.badge = value
+    ? { value, tooltip: `${value} session${value === 1 ? '' : 's'} waiting` }
+    : undefined;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   mementoState = context.workspaceState;
   extensionPath = context.extensionPath;
@@ -868,8 +891,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // a window reload restored before this activation.
   void reconcileTerminals(provider);
 
+  // Keep the activity-bar waiting badge in sync. Every state transition that
+  // matters already fires onDidChangeTreeData (status-file watch, terminal
+  // open/close, visibility), so riding that one event keeps the badge correct
+  // without threading updates through each command.
+  updateBadge(view, provider);
+
   context.subscriptions.push(
     view,
+    provider.onDidChangeTreeData(() => updateBadge(view, provider)),
     view.onDidChangeVisibility((e) => {
       if (e.visible) {
         provider.refresh();
