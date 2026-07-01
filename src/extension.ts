@@ -6,6 +6,7 @@ import * as crypto from 'crypto';
 import { exec } from 'child_process';
 import {
   DtachTreeProvider,
+  DetachedRowDecorations,
   DtachSession,
   SessionItem,
   config,
@@ -881,7 +882,8 @@ function updateBadge(view: vscode.TreeView<SessionItem>, provider: DtachTreeProv
 export function activate(context: vscode.ExtensionContext): void {
   mementoState = context.workspaceState;
   extensionPath = context.extensionPath;
-  const provider = new DtachTreeProvider(context.extensionUri);
+  const decorations = new DetachedRowDecorations();
+  const provider = new DtachTreeProvider(context.extensionUri, decorations);
   const view = vscode.window.createTreeView('dtachSessionsView', {
     treeDataProvider: provider,
     canSelectMany: true,
@@ -899,6 +901,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     view,
+    vscode.window.registerFileDecorationProvider(decorations),
     provider.onDidChangeTreeData(() => updateBadge(view, provider)),
     view.onDidChangeVisibility((e) => {
       if (e.visible) {
