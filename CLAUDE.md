@@ -124,10 +124,12 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
   selection is moot — that's *why* a spinner works where a coloured codicon
   wouldn't); baked amber bell `media/state-waiting.svg` for waiting (colour IS
   the signal, so it must be a baked SVG like `terminal-green.svg`); `$(check)`
-  themed codicon (charts.green) for `done` — here colour is *not* load-bearing
-  (a check's meaning rides on its shape), so a themed codicon is fine despite the
-  selection wash, keeping `media/` lean; the attached/plain terminal icon at
-  rest. `waiting` and `done` don't decay (both are legitimate resting states —
+  themed codicon for `done` — here colour is *not* load-bearing (a check's
+  meaning rides on its shape), so a themed codicon is fine despite the selection
+  wash, keeping `media/` lean; it is `charts.green` when attached and
+  `disabledForeground` when **detached**, so a finished-and-dormant row recedes
+  with its dimmed label — whereas the urgent waiting bell stays full-strength
+  when detached; the attached/plain terminal icon at rest. `waiting` and `done` don't decay (both are legitimate resting states —
   `done` persists until the next prompt). The row's relative time is
   `relativeAge(status.ts)` when a status exists (activity-relative — tracks the
   agent), falling back to socket `mtimeMs` otherwise; the tooltip keeps the

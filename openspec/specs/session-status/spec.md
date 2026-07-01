@@ -217,17 +217,19 @@ badge SHALL be shown.
 
 The panel SHALL visually de-emphasise (dim) the row of any session that is not
 attached in the current window, so attach-state is legible as an always-present
-row treatment independent of the run-state icon. The dimming SHALL apply to the
-row label and SHALL NOT dim or recolour the run-state icon, so a detached session
-that needs the user still shows its full-strength waiting icon on a dimmed row.
-Attached rows SHALL NOT be dimmed. The treatment SHALL update when a session's
-attach-state changes (attach, detach, window reload) using the same live
-attach detection as the row's icon and inline actions.
+row treatment. The dimming SHALL apply to the row label. The **waiting**
+(attention) icon SHALL remain at full strength on a detached row, so a detached
+session that needs the user still stands out; the **done** (resting) check icon
+SHALL be shown in a muted colour on a detached row, matching the dimmed label,
+since a finished-and-detached session is dormant. Attached rows SHALL NOT be
+dimmed. The treatment SHALL update when a session's attach-state changes (attach,
+detach, window reload) using the same live attach detection as the row's icon and
+inline actions.
 
 #### Scenario: Detached row is dimmed
 
 - **WHEN** a session is not attached in the current window
-- **THEN** its row label is dimmed while its run-state icon (if any) is shown at full strength
+- **THEN** its row label is dimmed
 
 #### Scenario: Attached row is not dimmed
 
@@ -238,6 +240,11 @@ attach detection as the row's icon and inline actions.
 
 - **WHEN** a detached session's Claude is waiting on a permission decision
 - **THEN** the row label is dimmed but the amber waiting icon remains at full strength
+
+#### Scenario: Detached done session recedes
+
+- **WHEN** a detached session's Claude has finished its turn (done)
+- **THEN** the row label is dimmed and the check icon is shown muted, not full-strength green
 
 #### Scenario: Dimming tracks attach-state changes
 

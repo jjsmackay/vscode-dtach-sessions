@@ -369,7 +369,13 @@ export class SessionItem extends vscode.TreeItem {
           icons?.waiting ?? new vscode.ThemeIcon('bell', new vscode.ThemeColor('charts.yellow'));
         break;
       case 'done':
-        this.iconPath = new vscode.ThemeIcon('check', new vscode.ThemeColor('charts.green'));
+        // Green when attached; muted when detached so a finished-and-dormant
+        // session recedes with its dimmed label. The waiting bell, by contrast,
+        // stays full-strength when detached (urgency must not dim).
+        this.iconPath = new vscode.ThemeIcon(
+          'check',
+          new vscode.ThemeColor(attached ? 'charts.green' : 'disabledForeground')
+        );
         break;
       default:
         this.iconPath = attached
