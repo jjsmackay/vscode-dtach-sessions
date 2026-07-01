@@ -5,6 +5,25 @@ All notable changes to the **dtach Sessions** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-01
+
+### Added
+
+- **Stale client reaping.** A dtach client orphaned when its terminal died
+  (window close, SSH drop) can wedge on the socket, leaving a later reattach
+  with a live cursor on a blank screen. Attaching now reaps these orphans first
+  so the new attach is the sole client and redraws cleanly
+  (`dtachSessions.reapStaleClientsOnAttach`, on by default; disable if you
+  deliberately attach one session from multiple windows). Reap on demand with
+  **Reap Stale Clients** (row) or **Reap All Stale Clients** (view title).
+  Reaping only ever kills clients — the session and its program keep running.
+  Linux remote hosts only.
+
+### Changed
+
+- Kill now terminates sessions with `SIGKILL`, so a wedged client that blocks
+  `SIGTERM` no longer survives a kill orphaned on the socket.
+
 ## [0.2.0] - 2026-06-29
 
 ### Added
