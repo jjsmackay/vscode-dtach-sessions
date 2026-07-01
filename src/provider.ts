@@ -28,6 +28,7 @@ export interface DtachConfig {
   startupCommand: string;
   reflectProcessTitle: boolean;
   showClaudeStatus: boolean;
+  reapStaleClientsOnAttach: boolean;
 }
 
 export function config(): DtachConfig {
@@ -40,6 +41,7 @@ export function config(): DtachConfig {
     startupCommand: c.get<string>('startupCommand', ''),
     reflectProcessTitle: c.get<boolean>('reflectProcessTitle', true),
     showClaudeStatus: c.get<boolean>('showClaudeStatus', true),
+    reapStaleClientsOnAttach: c.get<boolean>('reapStaleClientsOnAttach', true),
   };
 }
 

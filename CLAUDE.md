@@ -67,6 +67,26 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
 - Restart = confirm → `killOne` → `createSession(name)`: it composes the kill
   and create paths (fresh hash, fresh terminal, re-runs `startupCommand`); the
   dtach server and its scrollback do not survive.
+- Stale-client reaping (`reapStaleClientsOnAttach`, default on): a dtach master
+  tees its pty to **every** client under one shared winsize with no retained
+  buffer, so a client orphaned when its terminal died (window close, SSH drop)
+  wedges on the socket and a later attach gets a cursor on a blank screen. Kills
+  must be **`SIGKILL`** — a wedged client blocks `SIGTERM` (it only polls for it
+  inside the `select()` loop that never wakes without a tty); this is why
+  `killOne` uses `kill -9`. Detection is by pid identity: `staleClientPids`
+  takes the socket's `-a` clients (via `resolvePidsCommand`, then filtered on a
+  bare `-a` in `/proc/<pid>/cmdline` so the `-A` master is never touched) minus
+  this window's live terminal pid (`findTerminalForSocket` → `term.processId`,
+  which **is** the client pid because `exec -a` replaces bash in place). It
+  returns `undefined` (skip) when a matched terminal's pid hasn't resolved, so a
+  live client is never killed mid-spawn — and this pid-diff is what spares a
+  reload-restored client (its pid survives and re-matches) where a blind
+  "kill every client on the socket" would not. Reap fires only on the
+  create-fresh branch of `showOrCreateTerminal` (making it and the attach path
+  async), never on reuse; `createSession` passes `reapOnCreate` false since a new
+  socket can't have clients. Reaping only kills clients — master and socket
+  survive. Manual `Reap Stale Clients` (row) / `Reap All Stale Clients` (view
+  title) cover the already-attached blind spot. Linux `/proc` only.
 - Live Claude status (`showClaudeStatus`, default on) is hook-driven, not from
   PTY/transcript scraping. The bundled `scripts/claude-status-hook.py` forwarder
   is merged into every lifecycle event in `~/.claude/settings.json` by the

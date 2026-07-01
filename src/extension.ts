@@ -135,17 +135,26 @@ function refreshWhenReady(provider: DtachTreeProvider, socket: string): void {
  * Show the terminal already attached to this session if one is open; otherwise
  * launch a fresh dtach terminal with the given args. Returns the new terminal,
  * or undefined when an existing one was reused.
+ *
+ * When `reapOnCreate` is set (the attach path), any stale clients on the socket
+ * are reaped — and the reap awaited — before the fresh client is created, so the
+ * new client is the sole one on the master and redraws cleanly. Reuse of an
+ * existing terminal skips the reap entirely.
  */
-function showOrCreateTerminal(
+async function showOrCreateTerminal(
   session: { name: string; socket: string },
   args: string[],
   dtachPath: string,
-  cwd?: string
-): vscode.Terminal | undefined {
+  cwd?: string,
+  reapOnCreate = false
+): Promise<vscode.Terminal | undefined> {
   const existing = findTerminalForSocket(session);
   if (existing) {
     existing.show();
     return undefined;
+  }
+  if (reapOnCreate && config().reapStaleClientsOnAttach) {
+    await reapStaleClients(session);
   }
   // With reflectProcessTitle off, pin the session name as the tab title.
   //
@@ -178,10 +187,10 @@ function showOrCreateTerminal(
   return term;
 }
 
-function attach(session: { name: string; socket: string }): void {
+async function attach(session: { name: string; socket: string }): Promise<void> {
   const { redrawMethod, dtachPath } = config();
   const args = ['-a', session.socket, ...redrawArgs(redrawMethod)];
-  showOrCreateTerminal(session, args, dtachPath);
+  await showOrCreateTerminal(session, args, dtachPath, undefined, true);
 }
 
 /** Turn an arbitrary string (e.g. a folder name) into a valid session name. */
@@ -220,7 +229,11 @@ function validateName(value: string, taken?: Set<string>): string | undefined {
  * `dtach -A`. `cwd` sets the shell's working directory. Runs the configured
  * startup command in the new terminal. Returns false if the socket dir can't be made.
  */
-function createSession(provider: DtachTreeProvider, name: string, cwd?: string): boolean {
+async function createSession(
+  provider: DtachTreeProvider,
+  name: string,
+  cwd?: string
+): Promise<boolean> {
   const { socketDir, socketPrefix, redrawMethod, dtachPath, startupCommand } = config();
   try {
     fs.mkdirSync(socketDir, { recursive: true });
@@ -235,8 +248,9 @@ function createSession(provider: DtachTreeProvider, name: string, cwd?: string):
   do {
     socket = path.join(socketDir, `${socketPrefix}${name}_${sessionHash()}.dtach`);
   } while (fs.existsSync(socket));
+  // A brand-new socket has no pre-existing clients, so no reap on this path.
   const args = ['-A', socket, ...redrawArgs(redrawMethod), SHELL];
-  const term = showOrCreateTerminal({ name, socket }, args, dtachPath, cwd);
+  const term = await showOrCreateTerminal({ name, socket }, args, dtachPath, cwd);
   if (term) {
     if (startupCommand) {
       term.sendText(startupCommand, true);
@@ -259,7 +273,7 @@ async function create(provider: DtachTreeProvider): Promise<void> {
   // Create always makes a NEW session: if the display name is taken, bump a digit
   // so the tree never shows two identical labels.
   const finalName = uniqueName(taken, name);
-  if (createSession(provider, finalName) && finalName !== name) {
+  if ((await createSession(provider, finalName)) && finalName !== name) {
     vscode.window.showInformationMessage(
       `dtach Sessions: "${name}" already exists; created "${finalName}".`
     );
@@ -279,9 +293,9 @@ async function openInFolder(provider: DtachTreeProvider, uri?: vscode.Uri): Prom
   const name = sanitizeName(path.basename(uri.fsPath));
   const existing = provider.listSessions().filter((s) => s.name === name);
   if (existing.length) {
-    attach(existing[0]); // listSessions is newest-first; reuse the most recent
+    await attach(existing[0]); // listSessions is newest-first; reuse the most recent
   } else {
-    createSession(provider, name, uri.fsPath);
+    await createSession(provider, name, uri.fsPath);
   }
 }
 
@@ -332,7 +346,7 @@ async function rename(provider: DtachTreeProvider, session: DtachSession): Promi
       // VS Code has no terminal-rename API; dispose and reattach under the new
       // name (the close handler untracks the old terminal).
       term.dispose();
-      showOrCreateTerminal(
+      await showOrCreateTerminal(
         { name: newName, socket: newSocket },
         ['-a', newSocket, ...redrawArgs(redrawMethod)],
         dtachPath
@@ -359,7 +373,7 @@ async function quickSwitch(provider: DtachTreeProvider): Promise<void> {
     { placeHolder: 'Attach dtach session' }
   );
   if (pick) {
-    attach(pick.session);
+    await attach(pick.session);
   }
 }
 
@@ -382,13 +396,98 @@ function copyAttachCommand(session: DtachSession): void {
  * path for legacy hashless sockets. Shared by killOne (which kills them) and
  * sessionCwd (which walks the master to its shell).
  */
-function resolvePidsCommand(session: DtachSession): string {
-  const sock = shellEscape(session.socket);
+/** Shell expression listing pids whose argv references the socket (master AND
+ *  connected clients), by rename-invariant hash anchor when present, else the
+ *  regex-escaped path. Unlike `lsof -t`, this sees connected clients, not just
+ *  the process bound to the socket path. */
+function pgrepSocketCommand(session: { socket: string }): string {
   const hash = hashOf(path.basename(session.socket));
-  const fallback = hash
+  return hash
     ? `pgrep -f ${shellEscape(`_${hash}\\.dtach`)}`
     : `pgrep -f ${shellEscape(escapeRegex(session.socket))}`;
-  return `lsof -t ${sock} 2>/dev/null || ${fallback} 2>/dev/null`;
+}
+
+function resolvePidsCommand(session: { socket: string }): string {
+  const sock = shellEscape(session.socket);
+  return `lsof -t ${sock} 2>/dev/null || ${pgrepSocketCommand(session)} 2>/dev/null`;
+}
+
+// --- Stale client reaping -----------------------------------------------------
+//
+// A dtach master tees its pty to every attached client under one shared winsize
+// with no retained buffer, and a client wedged after its tty died (window close,
+// SSH drop) blocks SIGTERM and lingers. A second client then joins the same
+// master and gets a live cursor on a blank screen. We reap orphaned clients by
+// pid identity: a client is stale when its pid is not this window's live
+// terminal for the socket. See openspec/changes/reap-stale-clients.
+
+/** Run a shell command and resolve to its stdout ('' on error). */
+function execCapture(cmd: string): Promise<string> {
+  return new Promise((resolve) => {
+    exec(cmd, (err, stdout) => resolve(err ? '' : stdout || ''));
+  });
+}
+
+/**
+ * The attach-client (`dtach -a`) pids currently on a socket — never the `-A`
+ * master. Candidates are the processes whose argv references the socket
+ * (`pgrepSocketCommand`, which — unlike `lsof -t` — sees connected clients, not
+ * just the process bound to the socket path); each is kept only if its
+ * `/proc/<pid>/cmdline` carries a bare `-a` and no `-A`, so the master is
+ * excluded even if a session name happens to look like a flag. Linux `/proc`
+ * only.
+ */
+async function clientPidsOnSocket(session: { socket: string }): Promise<number[]> {
+  const cmd =
+    `${pgrepSocketCommand(session)} 2>/dev/null | ` +
+    `while read p; do ` +
+    `tr '\\0' '\\n' < /proc/$p/cmdline 2>/dev/null | ` +
+    `awk '$0=="-A"{m=1} $0=="-a"{c=1} END{exit !(c && !m)}' && echo $p; ` +
+    `done`;
+  const out = await execCapture(cmd);
+  return out
+    .split(/\s+/)
+    .map((s) => parseInt(s, 10))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
+/**
+ * The stale client pids for a session: the socket's `-a` clients minus this
+ * window's live terminal for it. Returns `undefined` — meaning "do not reap" —
+ * when a matched terminal's processId has not resolved yet, so a client that
+ * might be our own is never killed mid-spawn. With no live terminal (the
+ * create-fresh branch), every client is stale.
+ */
+async function staleClientPids(
+  session: { name: string; socket: string }
+): Promise<number[] | undefined> {
+  const clients = await clientPidsOnSocket(session);
+  if (clients.length === 0) {
+    return [];
+  }
+  const term = findTerminalForSocket(session);
+  if (!term) {
+    return clients;
+  }
+  const myPid = await term.processId;
+  if (!myPid) {
+    return undefined; // conservative: cannot identify our own client
+  }
+  return clients.filter((p) => p !== myPid);
+}
+
+/**
+ * Terminate the session's stale clients with SIGKILL (wedged clients block
+ * SIGTERM). Never touches the master or the socket file, so the session and its
+ * program survive. Returns the number of clients reaped.
+ */
+async function reapStaleClients(session: { name: string; socket: string }): Promise<number> {
+  const stale = await staleClientPids(session);
+  if (!stale || stale.length === 0) {
+    return 0;
+  }
+  await execCapture(`kill -9 ${stale.join(' ')} 2>/dev/null`);
+  return stale.length;
 }
 
 /**
@@ -397,9 +496,11 @@ function resolvePidsCommand(session: DtachSession): string {
  */
 async function killOne(session: DtachSession): Promise<void> {
   const sock = shellEscape(session.socket);
+  // SIGKILL, not SIGTERM: a wedged attach client blocks SIGTERM and would
+  // otherwise outlive the kill, orphaned on the socket.
   const cmd =
     `pids=$(${resolvePidsCommand(session)}); ` +
-    `[ -n "$pids" ] && kill $pids 2>/dev/null; ` +
+    `[ -n "$pids" ] && kill -9 $pids 2>/dev/null; ` +
     `rm -f ${sock}`;
 
   await new Promise<void>((resolve) => {
@@ -457,6 +558,35 @@ async function killAll(provider: DtachTreeProvider): Promise<void> {
   provider.refresh();
 }
 
+/** "reaped N stale client(s)" — shared by the manual reap commands. */
+function reapedCount(n: number): string {
+  return `reaped ${n} stale client${n === 1 ? '' : 's'}`;
+}
+
+/** Manually reap one session's stale clients and report the count. */
+async function reapSession(session: DtachSession): Promise<void> {
+  const n = await reapStaleClients(session);
+  vscode.window.showInformationMessage(
+    n === 0
+      ? `dtach Sessions: no stale clients on "${session.name}".`
+      : `dtach Sessions: ${reapedCount(n)} on "${session.name}".`
+  );
+}
+
+/** Manually reap stale clients across every listed session and report the total. */
+async function reapAll(provider: DtachTreeProvider): Promise<void> {
+  const sessions = provider.listSessions();
+  let total = 0;
+  for (const s of sessions) {
+    total += await reapStaleClients(s);
+  }
+  vscode.window.showInformationMessage(
+    total === 0
+      ? 'dtach Sessions: no stale clients found.'
+      : `dtach Sessions: ${reapedCount(total)}.`
+  );
+}
+
 /**
  * Best-effort working directory of a session's shell, so a restart can reopen
  * there rather than at $HOME. The processes holding the socket are the dtach
@@ -499,7 +629,7 @@ async function restart(provider: DtachTreeProvider, session: DtachSession): Prom
   }
   const cwd = await sessionCwd(session); // capture before kill; the proc is gone after
   await killOne(session); // remove the old socket first so the name is free to reuse
-  createSession(provider, session.name, cwd);
+  await createSession(provider, session.name, cwd);
   provider.refresh();
 }
 
@@ -787,6 +917,10 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     ),
     vscode.commands.registerCommand('dtachSessions.killAll', () => killAll(provider)),
+    vscode.commands.registerCommand('dtachSessions.reapStaleClients', (item: SessionItem | DtachSession) =>
+      reapSession(toSession(item))
+    ),
+    vscode.commands.registerCommand('dtachSessions.reapAllStaleClients', () => reapAll(provider)),
     vscode.commands.registerCommand('dtachSessions.installClaudeHooks', () => installClaudeHooks()),
     vscode.commands.registerCommand('dtachSessions.uninstallClaudeHooks', () => uninstallClaudeHooks())
   );

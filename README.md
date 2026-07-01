@@ -59,6 +59,15 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
   confirmation) terminates the dtach server and opens a fresh shell under the
   same name, re-running `startupCommand`. Use it to relaunch a session that's
   wedged; in-session scrollback does not survive.
+- **Reap stale clients** — a dtach client that outlived its terminal (window
+  close, SSH drop) can wedge on the socket and, on the next attach, leave you a
+  live cursor on a blank screen (two clients share one pty with no redraw buffer,
+  and a wedged client ignores `SIGTERM`). By default attaching first reaps these
+  orphans (`dtachSessions.reapStaleClientsOnAttach`), so the new attach is the
+  sole client. Reap on demand from a row's right-click → **Reap Stale Clients**,
+  or clear them everywhere with **Reap All Stale Clients** in the view's `…`
+  menu. Reaping only ever kills clients — the session and its program keep
+  running. Linux hosts only.
 - **Copy** — right-click a row → Copy Socket Path / Copy Attach Command for
   scripting or SSH.
 - **Kill** — the inline trash icon (or right-click → Kill), with confirmation,
@@ -90,6 +99,7 @@ host (`extensionKind: ["workspace"]`), where the dtach sockets and binary live.
 | `dtachSessions.dtachPath` | `dtach` | Path to the dtach binary; set absolute if not on PATH. |
 | `dtachSessions.reflectProcessTitle` | `true` | Create attach terminals without a fixed name so the running program's title (e.g. an agent CLI's live status) drives the tab. The session name still labels the sidebar row. Set `false` to pin the session name on the tab. |
 | `dtachSessions.showClaudeStatus` | `true` | Show a Claude Code instance's live run-state (working / tool / waiting / idle) on each session row. Requires the status hooks (see Features). Linux hosts only. |
+| `dtachSessions.reapStaleClientsOnAttach` | `true` | Before attaching, terminate orphaned dtach clients left on the socket so the new attach redraws cleanly. Disable if you deliberately attach one session from multiple windows. Never affects the session itself. Linux hosts only. |
 
 **Migration note (prefix default):** the default `socketPrefix` is now empty
 (was `.claude-`). Sockets created by older versions are named `.claude-*.dtach`

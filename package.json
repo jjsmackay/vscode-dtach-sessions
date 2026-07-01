@@ -132,6 +132,16 @@
         "category": "dtach Sessions"
       },
       {
+        "command": "dtachSessions.reapStaleClients",
+        "title": "Reap Stale Clients",
+        "category": "dtach Sessions"
+      },
+      {
+        "command": "dtachSessions.reapAllStaleClients",
+        "title": "Reap All Stale Clients",
+        "category": "dtach Sessions"
+      },
+      {
         "command": "dtachSessions.installClaudeHooks",
         "title": "Install Claude Status Hooks",
         "category": "dtach Sessions"
@@ -163,6 +173,11 @@
           "command": "dtachSessions.killAll",
           "when": "view == dtachSessionsView",
           "group": "1_actions@2"
+        },
+        {
+          "command": "dtachSessions.reapAllStaleClients",
+          "when": "view == dtachSessionsView",
+          "group": "1_actions@3"
         }
       ],
       "view/item/context": [
@@ -195,6 +210,11 @@
           "command": "dtachSessions.detach",
           "when": "view == dtachSessionsView",
           "group": "1_modify@2"
+        },
+        {
+          "command": "dtachSessions.reapStaleClients",
+          "when": "view == dtachSessionsView",
+          "group": "1_modify@3"
         },
         {
           "command": "dtachSessions.copySocketPath",
@@ -258,6 +278,13 @@
         {
           "command": "dtachSessions.kill",
           "when": "false"
+        },
+        {
+          "command": "dtachSessions.reapStaleClients",
+          "when": "false"
+        },
+        {
+          "command": "dtachSessions.reapAllStaleClients"
         }
       ]
     },
@@ -309,6 +336,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show the live run-state of a Claude Code instance running inside each session (working / tool / waiting / idle) on its sidebar row. Requires the status hooks: run 'dtach Sessions: Install Claude Status Hooks'. Linux remote hosts only (the forwarder reads /proc); other hosts simply show no status."
+        },
+        "dtachSessions.reapStaleClientsOnAttach": {
+          "type": "boolean",
+          "default": true,
+          "description": "Before attaching to a session, terminate any orphaned dtach clients left on its socket (e.g. a client wedged after a window close or SSH drop) so the new attach is the sole client and redraws cleanly. Disable if you deliberately attach the same session from more than one window. Reaping a client never affects the session itself. Linux remote hosts only (reads /proc)."
         }
       }
     }
