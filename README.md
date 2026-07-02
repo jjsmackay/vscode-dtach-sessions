@@ -142,7 +142,10 @@ Linux hosts only, and the forwarder needs `python3` on the host. See the
 
 - **dtach** on the remote host.
 - For **Kill**: `lsof` (preferred) or `pgrep`. Kill finds the owning process with
-  `lsof -t <socket>`, falls back to `pgrep -f`, then removes the socket.
+  `lsof -t <socket>`, falls back to `pgrep -f`, then removes the socket. With
+  neither available it removes the socket without confirming the process is gone,
+  so a live session could be left orphaned; on any Linux host that has dtach at
+  least one of these is effectively always present.
 - For **live Claude status** (optional): `python3` and a Linux host, since the
   forwarder reads `/proc`. Other hosts show no status and everything else works.
 

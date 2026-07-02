@@ -63,10 +63,49 @@ function dropPid(socket: string): void {
   updatePidMap(socket, null);
 }
 
+// Creation time of each terminal WE created (keyed by the terminal itself), for
+// the launch-failure heuristic. A terminal that dies within this window of its
+// creation looks like dtach failing to launch. VS Code fires onDidCloseTerminal
+// for both launch paths (bash `exec` exiting 127, and a bad direct shellPath),
+// so the fast close is the only trustworthy signal — an extension-host PATH
+// probe would false-negative because the host does not source .bashrc (see the
+// change design, decision D1). Reload-restored terminals are reconciled via
+// registerTerminal, not trackTerminal, so they carry no stamp and never warn.
+const LAUNCH_FAIL_WINDOW_MS = 1500;
+const terminalCreatedAt = new Map<vscode.Terminal, number>();
+
 /** Record a freshly created terminal for reattach: in-memory registry + persisted pid. */
 function trackTerminal(socket: string, term: vscode.Terminal): void {
   registerTerminal(socket, term);
   persistPid(socket, term);
+  terminalCreatedAt.set(term, Date.now());
+}
+
+/**
+ * If a closing terminal is one we created that died within the fast-close
+ * window, warn that dtach likely failed to launch and offer to open the
+ * dtachSessions.dtachPath setting. Always clears the terminal's creation stamp.
+ * Keys on ownership + timing only (not exit code): the direct launch path may
+ * report no code, and a genuine session lives far longer than the window, so a
+ * normal exit, Kill, detach, or reload-restored terminal never trips it.
+ */
+function maybeWarnLaunchFailure(term: vscode.Terminal): void {
+  const created = terminalCreatedAt.get(term);
+  terminalCreatedAt.delete(term);
+  if (created === undefined || Date.now() - created >= LAUNCH_FAIL_WINDOW_MS) {
+    return;
+  }
+  const { dtachPath } = config();
+  void vscode.window
+    .showWarningMessage(
+      `dtach Sessions: the session terminal closed immediately — dtach could not launch. Check the dtachSessions.dtachPath setting (currently "${dtachPath}").`,
+      'Open Settings'
+    )
+    .then((choice) => {
+      if (choice === 'Open Settings') {
+        void vscode.commands.executeCommand('workbench.action.openSettings', 'dtachSessions.dtachPath');
+      }
+    });
 }
 
 /**
@@ -709,6 +748,14 @@ function hooksInstalled(): boolean {
   }
 }
 
+/** True if python3 is resolvable on the extension host. Best-effort and
+ * advisory only: the ext-host PATH may differ from the host that runs Claude
+ * (see the change design, decision D3), so this never blocks install — it only
+ * decides whether to append a note. Never throws. */
+async function python3Available(): Promise<boolean> {
+  return (await execCapture('command -v python3')).trim().length > 0;
+}
+
 /** Install command: copy the forwarder to a stable path and merge it into each
  * Claude lifecycle event without disturbing the user's other hooks. Idempotent. */
 async function installClaudeHooks(): Promise<void> {
@@ -760,8 +807,12 @@ async function installClaudeHooks(): Promise<void> {
     );
     return;
   }
+  const note = (await python3Available())
+    ? ''
+    : ' Note: python3 was not found on the extension host, so status will not appear until it is available (this check runs on the extension host, whose PATH may differ from the host running Claude).';
   vscode.window.showInformationMessage(
-    'dtach Sessions: Claude status hooks installed. Sessions already running Claude will report status only after they are restarted (hooks are read at session start).'
+    'dtach Sessions: Claude status hooks installed. Sessions already running Claude will report status only after they are restarted (hooks are read at session start).' +
+      note
   );
 }
 
@@ -916,6 +967,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (socket) {
         dropPid(socket);
       }
+      maybeWarnLaunchFailure(t);
       provider.refresh();
     }),
     vscode.commands.registerCommand('dtachSessions.refresh', () => provider.refresh()),
