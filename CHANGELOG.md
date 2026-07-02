@@ -5,6 +5,27 @@ All notable changes to the **dtach Sessions** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-07-03
+
+### Added
+
+- **Legible dtach launch failures.** If a session's terminal dies the instant it
+  opens — the sign of a missing or mis-pathed `dtach` — the extension now says
+  so and offers an **Open Settings** button that jumps straight to
+  `dtachSessions.dtachPath`, instead of leaving you with VS Code's raw "failed to
+  launch" text. It reads the terminal's own launch result rather than probing the
+  host, so it never false-warns on a working setup.
+- **python3 check when installing Claude hooks.** Installing the status hooks now
+  notes if `python3` cannot be found on the extension host, so a "hooks installed
+  but no status ever appears" outcome is explained rather than silent.
+  Installation still completes either way.
+
+### Changed
+
+- Documented that **Kill** relies on `lsof` or `pgrep` to confirm what it
+  removes; without either it removes the socket without confirming the process is
+  gone.
+
 ## [0.3.2] - 2026-07-02
 
 ### Added
