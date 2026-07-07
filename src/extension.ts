@@ -332,20 +332,25 @@ async function createSession(
 /**
  * Create a NEW session named `name`, deduping the display name against current
  * sessions: if it's taken, bump a digit (`name-2`, `name-3`, …) so the tree
- * never shows two identical labels, notifying when the name was changed. `cwd`
- * sets the shell's working directory.
+ * never shows two identical labels. `cwd` sets the shell's working directory.
+ *
+ * When the name is bumped, `bumpNotice` builds the toast. It defaults to a
+ * collision warning — right for a user-chosen name, where a bump means "the name
+ * you asked for was taken". Callers whose bump is expected (a family create,
+ * where the base always collides with its own source) pass a neutral message so
+ * the routine feedback isn't framed as a surprise.
  */
 async function createDeduped(
   provider: DtachTreeProvider,
   name: string,
-  cwd?: string
+  cwd?: string,
+  bumpNotice: (finalName: string) => string = (finalName) =>
+    `dtach Sessions: "${name}" already exists; created "${finalName}".`
 ): Promise<void> {
   const taken = new Set(provider.listSessions().map((s) => s.name));
   const finalName = uniqueName(taken, name);
   if ((await createSession(provider, finalName, cwd)) && finalName !== name) {
-    vscode.window.showInformationMessage(
-      `dtach Sessions: "${name}" already exists; created "${finalName}".`
-    );
+    vscode.window.showInformationMessage(bumpNotice(finalName));
   }
 }
 
@@ -820,7 +825,12 @@ async function restart(provider: DtachTreeProvider, session: DtachSession): Prom
  */
 async function newSessionHere(provider: DtachTreeProvider, session: DtachSession): Promise<void> {
   const cwd = await sessionCwd(session);
-  await createDeduped(provider, familyBase(session.name), cwd);
+  await createDeduped(
+    provider,
+    familyBase(session.name),
+    cwd,
+    (finalName) => `dtach Sessions: created "${finalName}".`
+  );
 }
 
 // --- Claude status hooks ------------------------------------------------------
