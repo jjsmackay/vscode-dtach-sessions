@@ -316,9 +316,28 @@ async function createSession(
   return true;
 }
 
+/**
+ * Create a NEW session named `name`, deduping the display name against current
+ * sessions: if it's taken, bump a digit (`name-2`, `name-3`, …) so the tree
+ * never shows two identical labels, notifying when the name was changed. `cwd`
+ * sets the shell's working directory.
+ */
+async function createDeduped(
+  provider: DtachTreeProvider,
+  name: string,
+  cwd?: string
+): Promise<void> {
+  const taken = new Set(provider.listSessions().map((s) => s.name));
+  const finalName = uniqueName(taken, name);
+  if ((await createSession(provider, finalName, cwd)) && finalName !== name) {
+    vscode.window.showInformationMessage(
+      `dtach Sessions: "${name}" already exists; created "${finalName}".`
+    );
+  }
+}
+
 /** The "+" command: prompt for a name and create a new session (display-name deduped). */
 async function create(provider: DtachTreeProvider): Promise<void> {
-  const taken = new Set(provider.listSessions().map((s) => s.name));
   const name = await vscode.window.showInputBox({
     prompt: 'New dtach session name',
     validateInput: (value) => validateName(value),
@@ -326,14 +345,7 @@ async function create(provider: DtachTreeProvider): Promise<void> {
   if (!name) {
     return;
   }
-  // Create always makes a NEW session: if the display name is taken, bump a digit
-  // so the tree never shows two identical labels.
-  const finalName = uniqueName(taken, name);
-  if ((await createSession(provider, finalName)) && finalName !== name) {
-    vscode.window.showInformationMessage(
-      `dtach Sessions: "${name}" already exists; created "${finalName}".`
-    );
-  }
+  await createDeduped(provider, name);
 }
 
 // `role` (not `kind`) is the discriminant: vscode.QuickPickItem already has a
@@ -342,17 +354,23 @@ type FolderPickItem =
   | (vscode.QuickPickItem & { role: 'attach'; session: DtachSession })
   | (vscode.QuickPickItem & { role: 'new' });
 
-/** The "New session" row's label tracks the current input value. */
+/** The "New session" row; its label previews the sanitised name that will be
+ * created (not the raw input) so the row can't promise a name `sanitizeName`
+ * would rewrite. `alwaysShow` keeps it visible under VS Code's value-filter. */
 function newSessionItem(value: string): FolderPickItem {
-  return { role: 'new', label: `$(add) New session "${value}"` };
+  const name = sanitizeName(value);
+  const label = name ? `$(add) New session "${name}"` : '$(add) New session';
+  return { role: 'new', label, alwaysShow: true };
 }
 
 /**
  * Explorer right-click "Open in Detach Session": show a QuickPick offering
  * every session in the folder's name family (attach) plus a "New session"
- * entry seeded from the folder basename. The input stays editable; attach
- * rows are marked `alwaysShow` so VS Code's own value-filtering can't hide
- * them as the user types a custom new-session name (design D2).
+ * entry seeded from the folder basename. The "New session" row is the active
+ * default, so the prefilled name + Enter creates; attaching to a family member
+ * is an explicit choice. The input stays editable; attach rows are marked
+ * `alwaysShow` so VS Code's own value-filtering can't hide them as the user
+ * types a custom new-session name (design D2).
  */
 async function openInFolder(provider: DtachTreeProvider, uri?: vscode.Uri): Promise<void> {
   if (!uri) {
@@ -375,11 +393,19 @@ async function openInFolder(provider: DtachTreeProvider, uri?: vscode.Uri): Prom
   const qp = vscode.window.createQuickPick<FolderPickItem>();
   qp.title = uri.fsPath;
   qp.placeholder = 'Session name';
+
+  // Attach rows are offered above, but "New session" is the *active* row, so the
+  // prefilled name + Enter creates by default (attaching is an explicit up-arrow
+  // choice). Reassigning `items` resets the active row, so re-pin it on every
+  // edit — otherwise Enter after typing would land on a leading attach row.
+  const render = (value: string) => {
+    const newItem = newSessionItem(value);
+    qp.items = [...attachItems, newItem];
+    qp.activeItems = [newItem];
+  };
   qp.value = base;
-  qp.items = [...attachItems, newSessionItem(base)];
-  qp.onDidChangeValue((value) => {
-    qp.items = [...attachItems, newSessionItem(value)];
-  });
+  render(base);
+  qp.onDidChangeValue(render);
 
   let attachTo: DtachSession | undefined;
   let newName: string | undefined;
@@ -395,9 +421,16 @@ async function openInFolder(provider: DtachTreeProvider, uri?: vscode.Uri): Prom
     }
     const name = sanitizeName(qp.value);
     if (!name) {
-      // QuickPick has no InputBox-style validationMessage; keep the picker
-      // open and surface create()'s own empty-name message as the item text.
-      qp.items = [...attachItems, { role: 'new', label: `$(error) ${validateName('')}`, alwaysShow: true }];
+      // QuickPick has no InputBox-style validationMessage; keep the picker open,
+      // surface create()'s own empty-name message as the item text, and keep it
+      // active so a repeat Enter re-shows the error rather than attaching.
+      const errorItem: FolderPickItem = {
+        role: 'new',
+        label: `$(error) ${validateName('')}`,
+        alwaysShow: true,
+      };
+      qp.items = [...attachItems, errorItem];
+      qp.activeItems = [errorItem];
       return;
     }
     newName = name;
@@ -413,15 +446,8 @@ async function openInFolder(provider: DtachTreeProvider, uri?: vscode.Uri): Prom
     await attach(attachTo); // listSessions is newest-first; family preserves that order
     return;
   }
-  if (!newName) {
-    return;
-  }
-  const taken = new Set(provider.listSessions().map((s) => s.name));
-  const finalName = uniqueName(taken, newName);
-  if ((await createSession(provider, finalName, uri.fsPath)) && finalName !== newName) {
-    vscode.window.showInformationMessage(
-      `dtach Sessions: "${newName}" already exists; created "${finalName}".`
-    );
+  if (newName) {
+    await createDeduped(provider, newName, uri.fsPath);
   }
 }
 
