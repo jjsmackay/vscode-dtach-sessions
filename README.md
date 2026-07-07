@@ -70,6 +70,7 @@ or the command palette (search "dtach Sessions").
 | **Attach** | Open (or focus) a terminal for the session. |
 | **Switch Session** | Fuzzy-find and attach a session without leaving the keyboard. |
 | **Open in Detach Session** | Right-click a folder in the Explorer: pick a listed session to attach, or type a name (defaults to the folder) and create a new one rooted there. Multiple sessions per folder are numbered like **+**. |
+| **New Session Here** | Right-click a session row: create a fresh sibling rooted in that session's current working directory (resolved the same way as Restart), joining its name family. |
 | **Rename** | Move the socket and relabel the row and its terminal. The live session survives. |
 | **Detach** | Close this window's terminal but leave the dtach server running. |
 | **Restart** | Terminate the server and open a fresh shell under the same name, re-running `startupCommand`. Scrollback does not survive. |

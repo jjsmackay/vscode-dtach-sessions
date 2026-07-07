@@ -243,6 +243,11 @@ function sanitizeName(raw: string): string {
   return raw.trim().replace(/[/\s]+/g, '-');
 }
 
+/** A family sibling's name is the base plus this suffix pattern — shared by
+ * `sessionFamily` (matching) and `familyBase` (stripping) so the numeric-suffix
+ * convention lives in one place. */
+const FAMILY_SUFFIX = '-\\d+';
+
 /** Sessions in `base`'s name family: `base` itself and any `base-N` numeric
  * siblings, in `sessions`' given order (callers pass listSessions()'s
  * newest-first order through unchanged). Deliberately broader than
@@ -251,8 +256,16 @@ function sanitizeName(raw: string): string {
  * membership matches any numeric suffix, not just the ones `uniqueName` would
  * pick next. */
 function sessionFamily(sessions: DtachSession[], base: string): DtachSession[] {
-  const suffixed = new RegExp(`^${escapeRegex(base)}-\\d+$`);
+  const suffixed = new RegExp(`^${escapeRegex(base)}${FAMILY_SUFFIX}$`);
   return sessions.filter((s) => s.name === base || suffixed.test(s.name));
+}
+
+/** The family base of a display name: the name with a trailing `-N` numeric
+ * suffix removed, matching `sessionFamily`'s notion of membership. So the base
+ * of both `api` and `api-2` is `api` — cloning a sibling rejoins the family
+ * (`api-2` → `api-3`) rather than nesting (`api-2-2`). */
+function familyBase(name: string): string {
+  return name.replace(new RegExp(`${FAMILY_SUFFIX}$`), '');
 }
 
 /** Return `base`, or `base-2`, `base-3`, ... — the first display name that is free. */
@@ -320,20 +333,25 @@ async function createSession(
 /**
  * Create a NEW session named `name`, deduping the display name against current
  * sessions: if it's taken, bump a digit (`name-2`, `name-3`, …) so the tree
- * never shows two identical labels, notifying when the name was changed. `cwd`
- * sets the shell's working directory.
+ * never shows two identical labels. `cwd` sets the shell's working directory.
+ *
+ * When the name is bumped, `bumpNotice` builds the toast. It defaults to a
+ * collision warning — right for a user-chosen name, where a bump means "the name
+ * you asked for was taken". Callers whose bump is expected (a family create,
+ * where the base always collides with its own source) pass a neutral message so
+ * the routine feedback isn't framed as a surprise.
  */
 async function createDeduped(
   provider: DtachTreeProvider,
   name: string,
-  cwd?: string
+  cwd?: string,
+  bumpNotice: (finalName: string) => string = (finalName) =>
+    `dtach Sessions: "${name}" already exists; created "${finalName}".`
 ): Promise<void> {
   const taken = new Set(provider.listSessions().map((s) => s.name));
   const finalName = uniqueName(taken, name);
   if ((await createSession(provider, finalName, cwd)) && finalName !== name) {
-    vscode.window.showInformationMessage(
-      `dtach Sessions: "${name}" already exists; created "${finalName}".`
-    );
+    vscode.window.showInformationMessage(bumpNotice(finalName));
   }
 }
 
@@ -778,11 +796,12 @@ async function reapAll(provider: DtachTreeProvider): Promise<void> {
 }
 
 /**
- * Best-effort working directory of a session's shell, so a restart can reopen
- * there rather than at $HOME. The processes holding the socket are the dtach
- * master plus any attached clients (same set killOne resolves); only the master
- * has a child (the shell), so find that child and read its cwd via lsof. Returns
- * undefined when it can't be determined (no proc found, lsof missing, etc.).
+ * Best-effort working directory of a session's shell, so a restart or a "New
+ * Session Here" clone can reopen there rather than at $HOME. The processes
+ * holding the socket are the dtach master plus any attached clients (same set
+ * killOne resolves); only the master has a child (the shell), so find that
+ * child and read its cwd via lsof. Returns undefined when it can't be
+ * determined (no proc found, lsof missing, etc.).
  */
 function sessionCwd(session: DtachSession): Promise<string | undefined> {
   const cmd =
@@ -821,6 +840,26 @@ async function restart(provider: DtachTreeProvider, session: DtachSession): Prom
   await killOne(session); // remove the old socket first so the name is free to reuse
   await createSession(provider, session.name, cwd);
   provider.refresh();
+}
+
+/**
+ * "New Session Here": create a fresh family sibling rooted in `session`'s
+ * working directory — the pane-side counterpart to the Explorer's folder create.
+ * Composes the existing pieces: probe the live cwd (as restart does; resolves
+ * for detached sessions too, since detach kills only the client), take the
+ * family base so a sibling rejoins the family rather than nesting, then
+ * `createDeduped` to mint the next free numbered name. An unresolved cwd is left
+ * undefined, so `createSession` roots the shell at $HOME — the same silent
+ * fallback as restart.
+ */
+async function newSessionHere(provider: DtachTreeProvider, session: DtachSession): Promise<void> {
+  const cwd = await sessionCwd(session);
+  await createDeduped(
+    provider,
+    familyBase(session.name),
+    cwd,
+    (finalName) => `dtach Sessions: created "${finalName}".`
+  );
 }
 
 // --- Claude status hooks ------------------------------------------------------
@@ -1126,6 +1165,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('dtachSessions.restart', (item: SessionItem | DtachSession) =>
       restart(provider, toSession(item))
+    ),
+    vscode.commands.registerCommand('dtachSessions.newSessionHere', (item: SessionItem | DtachSession) =>
+      newSessionHere(provider, toSession(item))
     ),
     vscode.commands.registerCommand('dtachSessions.quickSwitch', () => quickSwitch(provider)),
     vscode.commands.registerCommand('dtachSessions.setSortOrder', () => setSortOrder(provider)),
