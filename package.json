@@ -111,6 +111,11 @@
         "category": "dtach Sessions"
       },
       {
+        "command": "dtachSessions.newSessionHere",
+        "title": "New Session Here",
+        "category": "dtach Sessions"
+      },
+      {
         "command": "dtachSessions.detach",
         "title": "Detach (keep session alive)",
         "icon": "media/pause-blue.svg",
@@ -207,14 +212,19 @@
           "group": "1_modify@1"
         },
         {
+          "command": "dtachSessions.newSessionHere",
+          "when": "view == dtachSessionsView && viewItem =~ /^dtachSession-/",
+          "group": "1_modify@2"
+        },
+        {
           "command": "dtachSessions.detach",
           "when": "view == dtachSessionsView",
-          "group": "1_modify@2"
+          "group": "1_modify@3"
         },
         {
           "command": "dtachSessions.reapStaleClients",
           "when": "view == dtachSessionsView",
-          "group": "1_modify@3"
+          "group": "1_modify@4"
         },
         {
           "command": "dtachSessions.copySocketPath",
