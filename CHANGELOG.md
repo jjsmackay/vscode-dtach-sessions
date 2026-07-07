@@ -5,6 +5,19 @@ All notable changes to the **dtach Sessions** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Multiple sessions per folder from the Explorer.** Right-click a folder →
+  **Open in Detach Session** now opens a picker instead of silently reusing or
+  creating: attach to any existing session in the folder's name family
+  (`<folder>` and its `<folder>-N` siblings, newest-first, each showing live
+  Claude status), or create a new numbered one. The prefilled folder name +
+  Enter creates by default; attaching to an existing session is an explicit
+  choice. **BREAKING**: the folder path no longer opens with zero prompts when
+  no session exists yet — accepting the prefilled name is one Enter.
+
 ## [0.3.3] - 2026-07-03
 
 ### Added
