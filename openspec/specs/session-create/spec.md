@@ -18,19 +18,40 @@ The extension SHALL provide a "+" command in the view title bar. Activating it S
 - **THEN** no terminal is opened and the tree is unchanged
 
 ### Requirement: Open session for a folder
-The extension SHALL contribute an "Open in Detach Session" command to the Explorer folder context menu (`explorer/context` with `when: explorerResourceIsFolder`). The session SHALL be named after the folder's basename (sanitized to a valid session name), without prompting. If a session with that name already exists it SHALL be opened (its open terminal reused if present, otherwise attached); otherwise a new session SHALL be created with the shell's working directory set to that folder.
+The extension SHALL contribute a single "Open in Detach Session" command to the Explorer folder context menu (`explorer/context` with `when: explorerResourceIsFolder`). Activating it SHALL always open a QuickPick (never silently reuse or create). The QuickPick's input box SHALL be prefilled with the folder's basename sanitised to a valid session name, and SHALL remain editable. The QuickPick SHALL present, below the input:
+
+- one "Attach" item for each existing session whose name is in the folder's name family — the basename itself and any `basename-N` numeric-suffix siblings — ordered newest-first, each item's description showing that session's live status label; and
+- one "New session" item whose label reflects the current input value.
+
+Selecting an "Attach" item SHALL open that session (reusing its open terminal if present, otherwise attaching). Selecting the "New session" item SHALL create a new session with the shell's working directory set to the folder, using the input value deduped via the numeric-suffix rule (see "Unique session name on collision"). Dismissing the QuickPick SHALL open and create nothing.
+
+Reuse ("Attach") items SHALL remain selectable while the user edits the input value; the QuickPick's default value-based item filtering SHALL NOT hide them.
+
+Matching is by name (basename) only; session working directory is not persisted, so two unrelated folders sharing a basename share one name family.
 
 #### Scenario: Folder has no session yet
-- **WHEN** the user right-clicks a folder `detach-sessions` with no existing session
-- **THEN** a session named `detach-sessions` is created with its shell rooted in that folder
+- **WHEN** the user right-clicks a folder `detach-sessions` with no existing session and accepts the prefilled input
+- **THEN** the QuickPick shows only a "New session" item, and on accept a session named `detach-sessions` is created with its shell rooted in that folder
 
-#### Scenario: Folder already has a session
-- **WHEN** the user right-clicks a folder `detach-sessions` whose session already exists
-- **THEN** that existing session is opened (reusing its terminal if one is open) rather than creating a duplicate
+#### Scenario: Folder already has sessions
+- **WHEN** the user right-clicks a folder `detach-sessions` with existing sessions `detach-sessions` and `detach-sessions-2`
+- **THEN** the QuickPick lists an "Attach" item for each (newest-first, with status), plus a "New session" item, and selecting an "Attach" item opens that session rather than creating a duplicate
+
+#### Scenario: Create a second session for a folder
+- **WHEN** the user right-clicks a folder `detach-sessions` whose session already exists and selects the "New session" item
+- **THEN** a new session is created rooted in that folder, named `detach-sessions-2` (next free numeric suffix)
+
+#### Scenario: Custom name in the input box
+- **WHEN** the user right-clicks a folder `detach-sessions`, edits the input to `runner`, and selects "New session"
+- **THEN** a new session named `runner` is created rooted in that folder, and the "Attach" items for the `detach-sessions` family remain visible while editing
 
 #### Scenario: Folder name needs sanitizing
 - **WHEN** the user right-clicks a folder named `My Project`
-- **THEN** the session name is `My-Project` (whitespace and slashes replaced)
+- **THEN** the input box is prefilled with `My-Project` (whitespace and slashes replaced)
+
+#### Scenario: User dismisses the QuickPick
+- **WHEN** the user right-clicks a folder and dismisses the QuickPick
+- **THEN** no terminal is opened and no session is created
 
 ### Requirement: Name validation
 The create input box SHALL validate the entered name via `validateInput` and reject any name that is empty, is whitespace-only, or contains `/`, whitespace, or other characters that would break the constructed socket path. Rejection SHALL show an inline validation message and prevent submission.
@@ -50,13 +71,15 @@ The create input box SHALL validate the entered name via `validateInput` and rej
 ### Requirement: Unique session name on collision
 Create SHALL always produce a new session. If the chosen name's socket already exists, the extension SHALL append the smallest free numeric suffix (`-2`, `-3`, ...) and use that name, informing the user when the name was changed. The underlying `dtach -A` remains idempotent, but it is given an unused socket so it creates rather than reattaches.
 
+For the folder QuickPick, the input box is prefilled with the raw basename (not pre-deduplicated); deduplication is applied when the "New session" item is accepted.
+
 #### Scenario: Name collision bumps a digit
 - **WHEN** the user creates a session named `foo` and `.claude-foo.dtach` already exists
 - **THEN** the session is created as `foo-2` (or the next free suffix) and the user is notified
 
-#### Scenario: Folder default is pre-deduplicated
+#### Scenario: Folder input prefilled with raw basename
 - **WHEN** the user right-clicks a folder `foo` whose session already exists
-- **THEN** the name input is pre-filled with the next free name (e.g. `foo-2`)
+- **THEN** the QuickPick input is prefilled with `foo` (not `foo-2`), and accepting "New session" creates `foo-2`
 
 ### Requirement: Shell selection
 The shell started inside the new dtach session SHALL be the value of the `$SHELL` environment variable. If `$SHELL` is unset or empty, the extension SHALL fall back to `/bin/bash`.
