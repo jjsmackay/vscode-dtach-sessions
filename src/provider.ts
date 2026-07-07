@@ -7,6 +7,7 @@ export interface DtachSession {
   name: string;
   socket: string;
   mtimeMs: number;
+  ctimeMs: number;
 }
 
 /** Expand a leading ~ to the home directory. */
@@ -20,6 +21,10 @@ export function expandHome(p: string): string {
   return p;
 }
 
+export type SortBy = 'created' | 'lastAttached' | 'name' | 'status';
+
+const SORT_BY_VALUES: SortBy[] = ['created', 'lastAttached', 'name', 'status'];
+
 export interface DtachConfig {
   socketDir: string;
   socketPrefix: string;
@@ -29,10 +34,12 @@ export interface DtachConfig {
   reflectProcessTitle: boolean;
   showClaudeStatus: boolean;
   reapStaleClientsOnAttach: boolean;
+  sortBy: SortBy;
 }
 
 export function config(): DtachConfig {
   const c = vscode.workspace.getConfiguration('dtachSessions');
+  const sortBy = c.get<string>('sortBy', 'created');
   return {
     socketDir: expandHome(c.get<string>('socketDir', '~/.dtach-sessions')),
     socketPrefix: c.get<string>('socketPrefix', ''),
@@ -42,6 +49,7 @@ export function config(): DtachConfig {
     reflectProcessTitle: c.get<boolean>('reflectProcessTitle', true),
     showClaudeStatus: c.get<boolean>('showClaudeStatus', true),
     reapStaleClientsOnAttach: c.get<boolean>('reapStaleClientsOnAttach', true),
+    sortBy: (SORT_BY_VALUES as string[]).includes(sortBy) ? (sortBy as SortBy) : 'created',
   };
 }
 
@@ -151,6 +159,23 @@ function labelForState(state: SessionState | undefined, tool?: string): string |
 /** The row badge for a status, or undefined when no badge should show. */
 export function statusLabel(status: SessionStatus | undefined): string | undefined {
   return labelForState(effectiveState(status), status?.tool);
+}
+
+/** Attention-queue priority for the `status` sort order: waiting first, then
+ * working/tool, then done, then everything else (idle or no status) — the same
+ * grouping the amber-bell/activity-bar attention model already implies. */
+function statusPriority(state: SessionState | undefined): number {
+  switch (state) {
+    case 'waiting':
+      return 0;
+    case 'working':
+    case 'tool':
+      return 1;
+    case 'done':
+      return 2;
+    default:
+      return 3;
+  }
 }
 
 /**
@@ -350,11 +375,11 @@ export class SessionItem extends vscode.TreeItem {
     const mtimeAge = relativeAge(session.mtimeMs);
     // The trailing time is activity-relative when a status exists — measured from
     // the last hook event, so it tracks what Claude is doing — and falls back to
-    // the socket mtime otherwise (the socket's mtime moves on attach/detach, not
-    // on agent activity). This keys on the status *existing*, not on `state`: a
-    // decayed status (idle, or stale working) still has a meaningful ts (time
-    // since Claude last acted), so we keep using it. The tooltip keeps the honest
-    // "last modified" mtime.
+    // the socket mtime otherwise (nothing is ever written to a dtach socket, so
+    // mtime is pinned at creation and never moves on attach/detach). This keys on
+    // the status *existing*, not on `state`: a decayed status (idle, or stale
+    // working) still has a meaningful ts (time since Claude last acted), so we
+    // keep using it. The tooltip keeps the honest creation-time mtime.
     const shownAge = status ? relativeAge(status.ts) : mtimeAge;
     // Run-state badge in the description (status-state), separate from
     // contextValue (attach-state); the two compose without either suppressing
@@ -362,7 +387,7 @@ export class SessionItem extends vscode.TreeItem {
     const base = attached ? `attached · ${shownAge}` : shownAge;
     this.description = badge ? `${badge} · ${base}` : base;
     this.tooltip =
-      `${session.socket}\nlast modified ${mtimeAge}` +
+      `${session.socket}\ncreated ${mtimeAge}` +
       `${attached ? '\nattached in this window' : ''}` +
       `${badge ? `\nclaude: ${badge}` : ''}`;
 
@@ -461,10 +486,11 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
 
   /**
    * List sockets in the configured directory: entries matching the prefix that
-   * end in `.dtach` and are actually sockets, newest (by mtime) first.
+   * end in `.dtach` and are actually sockets, ordered per `sortBy` (default
+   * `created`, i.e. newest by `mtime` first — the historical behaviour).
    */
   listSessions(): DtachSession[] {
-    const { socketDir, socketPrefix } = config();
+    const { socketDir, socketPrefix, sortBy, showClaudeStatus } = config();
     let entries: string[];
     try {
       entries = fs.readdirSync(socketDir);
@@ -495,8 +521,32 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
       if (!st.isSocket()) {
         continue;
       }
-      sessions.push({ name: displayName(f, socketPrefix), socket, mtimeMs: st.mtimeMs });
+      sessions.push({ name: displayName(f, socketPrefix), socket, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs });
     }
-    return sessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    switch (sortBy) {
+      case 'lastAttached':
+        return sessions.sort((a, b) => b.ctimeMs - a.ctimeMs);
+      case 'name':
+        return sessions.sort((a, b) => a.name.localeCompare(b.name));
+      case 'status': {
+        // Joins statuses itself (rather than taking a pre-joined list) so
+        // listSessions() stays a single self-contained entry point; reuses the
+        // same effectiveState the row icon and countWaiting() derive from, so
+        // this order can never disagree with what a row shows.
+        const statuses = showClaudeStatus ? readStatuses(socketDir) : undefined;
+        return sessions.sort((a, b) => {
+          const statusA = statusFor(a, statuses);
+          const statusB = statusFor(b, statuses);
+          const priorityDiff = statusPriority(effectiveState(statusA)) - statusPriority(effectiveState(statusB));
+          if (priorityDiff !== 0) {
+            return priorityDiff;
+          }
+          return (statusB?.ts ?? b.mtimeMs) - (statusA?.ts ?? a.mtimeMs);
+        });
+      }
+      case 'created':
+      default:
+        return sessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    }
   }
 }

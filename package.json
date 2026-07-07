@@ -122,6 +122,12 @@
         "category": "dtach Sessions"
       },
       {
+        "command": "dtachSessions.setSortOrder",
+        "title": "Set Sort Order",
+        "icon": "$(sort-precedence)",
+        "category": "dtach Sessions"
+      },
+      {
         "command": "dtachSessions.copySocketPath",
         "title": "Copy Socket Path",
         "category": "dtach Sessions"
@@ -163,6 +169,11 @@
           "command": "dtachSessions.refresh",
           "when": "view == dtachSessionsView",
           "group": "navigation@2"
+        },
+        {
+          "command": "dtachSessions.setSortOrder",
+          "when": "view == dtachSessionsView",
+          "group": "navigation@3"
         },
         {
           "command": "dtachSessions.quickSwitch",
@@ -247,6 +258,9 @@
       "commandPalette": [
         {
           "command": "dtachSessions.quickSwitch"
+        },
+        {
+          "command": "dtachSessions.setSortOrder"
         },
         {
           "command": "dtachSessions.killAll"
@@ -341,6 +355,23 @@
           "type": "boolean",
           "default": true,
           "description": "Before attaching to a session, terminate any orphaned dtach clients left on its socket (e.g. a client wedged after a window close or SSH drop) so the new attach is the sole client and redraws cleanly. Disable if you deliberately attach the same session from more than one window. Reaping a client never affects the session itself. Linux remote hosts only (reads /proc)."
+        },
+        "dtachSessions.sortBy": {
+          "type": "string",
+          "enum": [
+            "created",
+            "lastAttached",
+            "name",
+            "status"
+          ],
+          "enumDescriptions": [
+            "Socket creation time, most recent first. Stable for the life of a session.",
+            "Socket attach time, most recently attached first.",
+            "Display name, alphabetical.",
+            "Attention priority: waiting, then working/tool, then done, then idle."
+          ],
+          "default": "created",
+          "description": "Session list order. Change via 'dtach Sessions: Set Sort Order' or this setting directly."
         }
       }
     }

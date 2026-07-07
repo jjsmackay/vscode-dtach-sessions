@@ -9,6 +9,7 @@ import {
   DetachedRowDecorations,
   DtachSession,
   SessionItem,
+  SortBy,
   config,
   findTerminalForSocket,
   registerTerminal,
@@ -527,6 +528,34 @@ async function quickSwitch(provider: DtachTreeProvider): Promise<void> {
   if (pick) {
     await attach(pick.session);
   }
+}
+
+const SORT_ORDERS: { value: SortBy; label: string; description: string }[] = [
+  { value: 'created', label: 'Created', description: 'Newest first (default)' },
+  { value: 'lastAttached', label: 'Last Attached', description: 'Most recently attached first' },
+  { value: 'name', label: 'Name', description: 'Alphabetical' },
+  { value: 'status', label: 'Status', description: 'Waiting, then working, then done' },
+];
+
+/** View-title command: QuickPick the four session orders, marking the active
+ * one, and persist the choice to `dtachSessions.sortBy` (global). */
+async function setSortOrder(provider: DtachTreeProvider): Promise<void> {
+  const current = config().sortBy;
+  const pick = await vscode.window.showQuickPick(
+    SORT_ORDERS.map((o) => ({
+      value: o.value,
+      description: o.description,
+      label: o.value === current ? `$(check) ${o.label}` : o.label,
+    })),
+    { placeHolder: 'Sort sessions by...' }
+  );
+  if (!pick || pick.value === current) {
+    return;
+  }
+  await vscode.workspace
+    .getConfiguration('dtachSessions')
+    .update('sortBy', pick.value, vscode.ConfigurationTarget.Global);
+  provider.refresh();
 }
 
 function copySocketPath(session: DtachSession): void {
@@ -1099,6 +1128,7 @@ export function activate(context: vscode.ExtensionContext): void {
       restart(provider, toSession(item))
     ),
     vscode.commands.registerCommand('dtachSessions.quickSwitch', () => quickSwitch(provider)),
+    vscode.commands.registerCommand('dtachSessions.setSortOrder', () => setSortOrder(provider)),
     vscode.commands.registerCommand('dtachSessions.copySocketPath', (item: SessionItem | DtachSession) =>
       copySocketPath(toSession(item))
     ),
