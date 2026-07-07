@@ -172,6 +172,20 @@ export function hashOf(socketBasename: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
+/** Join a session to its live status from an already-loaded status map (see
+ * `readStatuses`), by socket hash. `statuses` undefined (status feature off)
+ * always yields undefined. */
+export function statusFor(
+  session: { socket: string },
+  statuses: Map<string, SessionStatus> | undefined
+): SessionStatus | undefined {
+  if (!statuses) {
+    return undefined;
+  }
+  const hash = hashOf(path.basename(session.socket));
+  return hash ? statuses.get(hash) : undefined;
+}
+
 /** Extract the dtach socket path from a terminal's launch args, if present. */
 export function socketFromTerminal(t: vscode.Terminal): string | undefined {
   const args = (t.creationOptions as vscode.TerminalOptions).shellArgs;
@@ -421,14 +435,7 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
   private sessionsWithStatus(): { session: DtachSession; status?: SessionStatus }[] {
     const cfg = config();
     const statuses = cfg.showClaudeStatus ? readStatuses(cfg.socketDir) : undefined;
-    return this.listSessions().map((session) => {
-      let status: SessionStatus | undefined;
-      if (statuses) {
-        const hash = hashOf(path.basename(session.socket));
-        status = hash ? statuses.get(hash) : undefined;
-      }
-      return { session, status };
-    });
+    return this.listSessions().map((session) => ({ session, status: statusFor(session, statuses) }));
   }
 
   getChildren(): SessionItem[] {

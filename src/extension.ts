@@ -17,6 +17,9 @@ import {
   hashOf,
   statusDir,
   removeStatus,
+  readStatuses,
+  statusFor,
+  statusLabel,
 } from './provider';
 
 const SHELL = process.env.SHELL || '/bin/bash';
@@ -239,6 +242,18 @@ function sanitizeName(raw: string): string {
   return raw.trim().replace(/[/\s]+/g, '-');
 }
 
+/** Sessions in `base`'s name family: `base` itself and any `base-N` numeric
+ * siblings, in `sessions`' given order (callers pass listSessions()'s
+ * newest-first order through unchanged). Deliberately broader than
+ * `uniqueName`'s own generation range (which only ever mints `-2`, `-3`, ...):
+ * a sibling can also arise from a manual create or rename, so family
+ * membership matches any numeric suffix, not just the ones `uniqueName` would
+ * pick next. */
+function sessionFamily(sessions: DtachSession[], base: string): DtachSession[] {
+  const suffixed = new RegExp(`^${escapeRegex(base)}-\\d+$`);
+  return sessions.filter((s) => s.name === base || suffixed.test(s.name));
+}
+
 /** Return `base`, or `base-2`, `base-3`, ... — the first display name that is free. */
 function uniqueName(existing: Set<string>, base: string): string {
   if (!existing.has(base)) {
@@ -301,9 +316,28 @@ async function createSession(
   return true;
 }
 
+/**
+ * Create a NEW session named `name`, deduping the display name against current
+ * sessions: if it's taken, bump a digit (`name-2`, `name-3`, …) so the tree
+ * never shows two identical labels, notifying when the name was changed. `cwd`
+ * sets the shell's working directory.
+ */
+async function createDeduped(
+  provider: DtachTreeProvider,
+  name: string,
+  cwd?: string
+): Promise<void> {
+  const taken = new Set(provider.listSessions().map((s) => s.name));
+  const finalName = uniqueName(taken, name);
+  if ((await createSession(provider, finalName, cwd)) && finalName !== name) {
+    vscode.window.showInformationMessage(
+      `dtach Sessions: "${name}" already exists; created "${finalName}".`
+    );
+  }
+}
+
 /** The "+" command: prompt for a name and create a new session (display-name deduped). */
 async function create(provider: DtachTreeProvider): Promise<void> {
-  const taken = new Set(provider.listSessions().map((s) => s.name));
   const name = await vscode.window.showInputBox({
     prompt: 'New dtach session name',
     validateInput: (value) => validateName(value),
@@ -311,32 +345,109 @@ async function create(provider: DtachTreeProvider): Promise<void> {
   if (!name) {
     return;
   }
-  // Create always makes a NEW session: if the display name is taken, bump a digit
-  // so the tree never shows two identical labels.
-  const finalName = uniqueName(taken, name);
-  if ((await createSession(provider, finalName)) && finalName !== name) {
-    vscode.window.showInformationMessage(
-      `dtach Sessions: "${name}" already exists; created "${finalName}".`
-    );
-  }
+  await createDeduped(provider, name);
+}
+
+// `role` (not `kind`) is the discriminant: vscode.QuickPickItem already has a
+// `kind` field (QuickPickItemKind, for separators), which would collide.
+type FolderPickItem =
+  | (vscode.QuickPickItem & { role: 'attach'; session: DtachSession })
+  | (vscode.QuickPickItem & { role: 'new' });
+
+/** The "New session" row; its label previews the sanitised name that will be
+ * created (not the raw input) so the row can't promise a name `sanitizeName`
+ * would rewrite. `alwaysShow` keeps it visible under VS Code's value-filter. */
+function newSessionItem(value: string): FolderPickItem {
+  const name = sanitizeName(value);
+  const label = name ? `$(add) New session "${name}"` : '$(add) New session';
+  return { role: 'new', label, alwaysShow: true };
 }
 
 /**
- * Explorer right-click "Open in Detach Session": open the session for this
- * folder (named after it), attaching to an existing one if present, otherwise
- * creating it with the shell rooted in that folder.
+ * Explorer right-click "Open in Detach Session": show a QuickPick offering
+ * every session in the folder's name family (attach) plus a "New session"
+ * entry seeded from the folder basename. The "New session" row is the active
+ * default, so the prefilled name + Enter creates; attaching to a family member
+ * is an explicit choice. The input stays editable; attach rows are marked
+ * `alwaysShow` so VS Code's own value-filtering can't hide them as the user
+ * types a custom new-session name (design D2).
  */
 async function openInFolder(provider: DtachTreeProvider, uri?: vscode.Uri): Promise<void> {
   if (!uri) {
     await create(provider);
     return;
   }
-  const name = sanitizeName(path.basename(uri.fsPath));
-  const existing = provider.listSessions().filter((s) => s.name === name);
-  if (existing.length) {
-    await attach(existing[0]); // listSessions is newest-first; reuse the most recent
-  } else {
-    await createSession(provider, name, uri.fsPath);
+  const base = sanitizeName(path.basename(uri.fsPath));
+  const family = sessionFamily(provider.listSessions(), base);
+
+  const { socketDir, showClaudeStatus } = config();
+  const statuses = family.length && showClaudeStatus ? readStatuses(socketDir) : undefined;
+  const attachItems: FolderPickItem[] = family.map((session) => ({
+    role: 'attach',
+    session,
+    label: `$(plug) Attach: ${session.name}`,
+    description: statusLabel(statusFor(session, statuses)),
+    alwaysShow: true,
+  }));
+
+  const qp = vscode.window.createQuickPick<FolderPickItem>();
+  qp.title = uri.fsPath;
+  qp.placeholder = 'Session name';
+
+  // Attach rows are offered above, but "New session" is the *active* row, so the
+  // prefilled name + Enter creates by default (attaching is an explicit up-arrow
+  // choice). Reassigning `items` resets the active row, so re-pin it on every
+  // edit — otherwise Enter after typing would land on a leading attach row.
+  const render = (value: string) => {
+    const newItem = newSessionItem(value);
+    qp.items = [...attachItems, newItem];
+    qp.activeItems = [newItem];
+  };
+  qp.value = base;
+  render(base);
+  qp.onDidChangeValue(render);
+
+  let attachTo: DtachSession | undefined;
+  let newName: string | undefined;
+  qp.onDidAccept(() => {
+    const picked = qp.selectedItems[0];
+    if (picked?.role === 'attach') {
+      attachTo = picked.session;
+      qp.hide();
+      return;
+    }
+    if (picked?.role !== 'new') {
+      return;
+    }
+    const name = sanitizeName(qp.value);
+    if (!name) {
+      // QuickPick has no InputBox-style validationMessage; keep the picker open,
+      // surface create()'s own empty-name message as the item text, and keep it
+      // active so a repeat Enter re-shows the error rather than attaching.
+      const errorItem: FolderPickItem = {
+        role: 'new',
+        label: `$(error) ${validateName('')}`,
+        alwaysShow: true,
+      };
+      qp.items = [...attachItems, errorItem];
+      qp.activeItems = [errorItem];
+      return;
+    }
+    newName = name;
+    qp.hide();
+  });
+  await new Promise<void>((resolve) => {
+    qp.onDidHide(resolve);
+    qp.show();
+  });
+  qp.dispose();
+
+  if (attachTo) {
+    await attach(attachTo); // listSessions is newest-first; family preserves that order
+    return;
+  }
+  if (newName) {
+    await createDeduped(provider, newName, uri.fsPath);
   }
 }
 

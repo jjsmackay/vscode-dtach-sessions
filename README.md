@@ -69,7 +69,7 @@ or the command palette (search "dtach Sessions").
 | **New Session** (`+`) | Prompt for a name and open a fresh shell under dtach. |
 | **Attach** | Open (or focus) a terminal for the session. |
 | **Switch Session** | Fuzzy-find and attach a session without leaving the keyboard. |
-| **Open in Detach Session** | Right-click a folder in the Explorer to attach, or create, a session rooted there and named after it. |
+| **Open in Detach Session** | Right-click a folder in the Explorer: pick a listed session to attach, or type a name (defaults to the folder) and create a new one rooted there. Multiple sessions per folder are numbered like **+**. |
 | **Rename** | Move the socket and relabel the row and its terminal. The live session survives. |
 | **Detach** | Close this window's terminal but leave the dtach server running. |
 | **Restart** | Terminate the server and open a fresh shell under the same name, re-running `startupCommand`. Scrollback does not survive. |
@@ -225,6 +225,12 @@ No unit suite. Run through these against a build:
 6. Reload the remote window, click a session: it reattaches.
 7. Select several rows → Kill, or Kill All from the `…` menu: all gone.
 8. Drag-select and right-click copy work natively in the attached terminal.
+9. Right-click a folder with no session: the QuickPick shows only "New
+   session"; accepting the prefilled name creates it, rooted there. Right-click
+   again: an **Attach** row for it now appears above "New session"; picking
+   "New session" a second time creates `<folder>-2`. Edit the input to a custom
+   name before accepting "New session": the Attach row(s) stay visible and
+   selectable throughout.
 
 ## Licence
 
