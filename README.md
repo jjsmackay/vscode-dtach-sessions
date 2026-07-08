@@ -83,6 +83,25 @@ stable id, so a rename moves the socket without losing track of the process, and
 a kill resolves the process by id rather than by name. Renamed sessions never
 end up orphaned.
 
+### Attaching from a plain terminal
+
+No VS Code needed: `scripts/dtach-attach.sh` lists the sockets in
+`~/.dtach-sessions` (or wherever `dtachSessions.socketDir` points) and attaches
+to whichever one you pick — a numbered menu, or an [fzf](https://github.com/junegunn/fzf)
+picker if it's on your `PATH`. It reads the same status files as the sidebar, so
+a session's `waiting`/`working`/`done` badge shows up in the list too.
+
+```sh
+scripts/dtach-attach.sh                       # defaults, matches the extension
+scripts/dtach-attach.sh -d ~/other-sockets    # a different socket directory
+```
+
+Flags `-d`/`-p`/`-r`/`-b` (or the `DTACH_SESSIONS_DIR`/`_PREFIX`/`_REDRAW`/`_BIN`
+env vars) override socket directory, prefix, redraw method, and the `dtach`
+binary, mirroring the matching settings below. It doesn't reap stale clients —
+use the sidebar's **Reap Stale Clients** first if an attach lands on a blank
+screen.
+
 ### Reaping stale clients
 
 A dtach client that outlives its terminal (you closed the window, the SSH link
