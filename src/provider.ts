@@ -332,18 +332,47 @@ export function sessionResourceUri(session: { socket: string }): vscode.Uri {
  * so dimming survives a window reload the same way the icon does.
  */
 export class DetachedRowDecorations implements vscode.FileDecorationProvider {
-  private readonly _onDidChange = new vscode.EventEmitter<undefined>();
+  private readonly _onDidChange = new vscode.EventEmitter<vscode.Uri[]>();
   readonly onDidChangeFileDecorations = this._onDidChange.event;
   private sessions = new Map<string, { name: string; socket: string }>();
+  /** URI strings of the rows currently dimmed (detached), from the last sync.
+   *  Used to fire only the rows whose dim-state flipped. */
+  private dimmed = new Set<string>();
 
-  /** Re-key the uri→session map from the current rows and notify VS Code to
-   *  re-query the decorations (attach-state may have changed). Called on each
-   *  tree refresh, riding the same signal as the row icons. Firing `undefined`
-   *  means "refresh all" — VS Code re-queries only the rows it currently shows,
-   *  so there is no need to enumerate the changed URIs. */
+  /** Re-key the uri→session map from the current rows and, *only if* the set of
+   *  dimmed (detached) rows changed, notify VS Code to re-query those specific
+   *  rows. Called on each tree refresh, riding the same signal as the row icons.
+   *
+   *  A status-only update (the common refresh) leaves attach-state — and thus
+   *  every decoration — unchanged; firing `undefined` ("refresh all") there
+   *  would invalidate the whole decoration cache and flash every detached row's
+   *  label to full strength for a frame before the dim is re-applied. So we
+   *  compute the new dimmed set, fire only the URIs whose state flipped, and
+   *  stay silent when nothing changed. Brand-new rows need no fire — VS Code
+   *  queries `provideFileDecoration` for them as they render. */
   sync(sessions: { name: string; socket: string }[]): void {
     this.sessions = new Map(sessions.map((s) => [sessionResourceUri(s).toString(), s]));
-    this._onDidChange.fire(undefined);
+    const nextDimmed = new Set<string>();
+    for (const s of sessions) {
+      if (findTerminalForSocket(s) === undefined) {
+        nextDimmed.add(sessionResourceUri(s).toString());
+      }
+    }
+    const changed: vscode.Uri[] = [];
+    for (const uri of this.dimmed) {
+      if (!nextDimmed.has(uri)) {
+        changed.push(vscode.Uri.parse(uri));
+      }
+    }
+    for (const uri of nextDimmed) {
+      if (!this.dimmed.has(uri)) {
+        changed.push(vscode.Uri.parse(uri));
+      }
+    }
+    this.dimmed = nextDimmed;
+    if (changed.length > 0) {
+      this._onDidChange.fire(changed);
+    }
   }
 
   provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
