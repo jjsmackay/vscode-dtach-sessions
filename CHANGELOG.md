@@ -5,6 +5,19 @@ All notable changes to the **dtach Sessions** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-13
+
+### Fixed
+
+- **Detached rows no longer flicker white on updates.** The detached-row dimming
+  decoration was invalidated wholesale on every tree refresh, so a Claude status
+  update — which never changes attach-state — flashed every dimmed row's label to
+  full strength for a frame before re-dimming. The decoration now fires only for
+  rows whose attach-state actually changed, and stays silent on status-only
+  refreshes.
+- Corrected the Explorer context menu label "Open in Detach Session" → "Open in
+  dtach Session".
+
 ## [0.4.0] - 2026-07-07
 
 ### Added
