@@ -8,6 +8,8 @@ import {
   DtachTreeProvider,
   DetachedRowDecorations,
   DtachSession,
+  readBoundSockets,
+  socketIsBound,
   SessionItem,
   SortBy,
   config,
@@ -167,7 +169,14 @@ function sessionHash(): string {
 function refreshWhenReady(provider: DtachTreeProvider, socket: string): void {
   let tries = 0;
   const tick = (): void => {
-    if (fs.existsSync(socket) || ++tries >= 15) {
+    // Poll liveness, not existence. On the restart-in-place path the socket FILE
+    // is precisely what survived the dead master, so an existence probe passes
+    // instantly and would refresh before dtach has re-bound — leaving the row
+    // reading dead, with its Claude status suppressed, until the next refresh.
+    // Boundness is the condition both callers actually wait for. An unreadable
+    // table makes liveness unknowable, so refresh and move on.
+    const bound = readBoundSockets();
+    if (!bound || socketIsBound(bound, socket) || ++tries >= 15) {
       provider.refresh();
       return;
     }
@@ -233,6 +242,31 @@ async function showOrCreateTerminal(
 }
 
 /**
+ * Launch a dtach master on `session.socket` with `-A` and replay the configured
+ * startup command into its terminal. The one place that knows the master arg
+ * vector (`-A`, the redraw args, the trailing SHELL) and that a fresh master
+ * needs `startupCommand` — shared by the create path and by attach's
+ * restart-in-place branch, which are otherwise line-for-line identical.
+ *
+ * Neither caller reaps: a brand-new socket has no pre-existing clients, and a
+ * socket whose master is gone cannot have any either. Returns undefined when an
+ * existing terminal for the socket was reused instead, so no master was launched
+ * and no startup command ran.
+ */
+async function launchMaster(
+  session: { name: string; socket: string },
+  cwd?: string
+): Promise<vscode.Terminal | undefined> {
+  const { redrawMethod, dtachPath, startupCommand } = config();
+  const args = ['-A', session.socket, ...redrawArgs(redrawMethod), SHELL];
+  const term = await showOrCreateTerminal(session, args, dtachPath, cwd);
+  if (term && startupCommand) {
+    term.sendText(startupCommand, true);
+  }
+  return term;
+}
+
+/**
  * Attach to a session, or restart it in place when its socket outlived its
  * master (host reboot, OOM kill, `kill -9`). `dtach -a` on such a socket exits
  * within milliseconds with `Connection refused` AND a success status, so it
@@ -249,16 +283,11 @@ async function showOrCreateTerminal(
  * old shell's cwd went with the process too, so the terminal opens at the
  * default — unlike `restart`, which can read cwd off a still-live process.
  */
-async function attach(session: DtachSession): Promise<void> {
-  const { redrawMethod, dtachPath, startupCommand } = config();
-  if (session.alive === false) {
-    // A socket with no master has no clients either, so no reap on this path.
-    const args = ['-A', session.socket, ...redrawArgs(redrawMethod), SHELL];
-    const term = await showOrCreateTerminal(session, args, dtachPath);
+async function attach(provider: DtachTreeProvider, session: DtachSession): Promise<void> {
+  if (!session.alive) {
+    const term = await launchMaster(session);
     if (term) {
-      if (startupCommand) {
-        term.sendText(startupCommand, true);
-      }
+      refreshWhenReady(provider, session.socket);
       void vscode.window.showInformationMessage(
         `dtach Sessions: "${session.name}" was restarted — its dtach process was gone ` +
           `(the host restarted, or it was killed), so the previous output is lost.`
@@ -266,6 +295,7 @@ async function attach(session: DtachSession): Promise<void> {
     }
     return;
   }
+  const { redrawMethod, dtachPath } = config();
   const args = ['-a', session.socket, ...redrawArgs(redrawMethod)];
   await showOrCreateTerminal(session, args, dtachPath, undefined, true);
 }
@@ -336,7 +366,7 @@ async function createSession(
   name: string,
   cwd?: string
 ): Promise<boolean> {
-  const { socketDir, socketPrefix, redrawMethod, dtachPath, startupCommand } = config();
+  const { socketDir, socketPrefix } = config();
   try {
     fs.mkdirSync(socketDir, { recursive: true });
   } catch (err) {
@@ -350,13 +380,8 @@ async function createSession(
   do {
     socket = path.join(socketDir, `${socketPrefix}${name}_${sessionHash()}.dtach`);
   } while (fs.existsSync(socket));
-  // A brand-new socket has no pre-existing clients, so no reap on this path.
-  const args = ['-A', socket, ...redrawArgs(redrawMethod), SHELL];
-  const term = await showOrCreateTerminal({ name, socket }, args, dtachPath, cwd);
+  const term = await launchMaster({ name, socket }, cwd);
   if (term) {
-    if (startupCommand) {
-      term.sendText(startupCommand, true);
-    }
     refreshWhenReady(provider, socket);
   }
   return true;
@@ -494,7 +519,7 @@ async function openInFolder(provider: DtachTreeProvider, uri?: vscode.Uri): Prom
   qp.dispose();
 
   if (attachTo) {
-    await attach(attachTo); // listSessions is newest-first; family preserves that order
+    await attach(provider, attachTo); // listSessions is newest-first; family preserves that order
     return;
   }
   if (newName) {
@@ -549,11 +574,20 @@ async function rename(provider: DtachTreeProvider, session: DtachSession): Promi
       // VS Code has no terminal-rename API; dispose and reattach under the new
       // name (the close handler untracks the old terminal).
       term.dispose();
-      await showOrCreateTerminal(
-        { name: newName, socket: newSocket },
-        ['-a', newSocket, ...redrawArgs(redrawMethod)],
-        dtachPath
-      );
+      if (session.alive) {
+        await showOrCreateTerminal(
+          { name: newName, socket: newSocket },
+          ['-a', newSocket, ...redrawArgs(redrawMethod)],
+          dtachPath
+        );
+      }
+      // A session whose master is gone has nothing to reattach to, so the
+      // disposed terminal is not replaced: relaunching `-a` at a socket that
+      // cannot serve it would die inside maybeWarnLaunchFailure's window and be
+      // misreported as a dtachSessions.dtachPath problem — the same
+      // misdiagnosis the attach path now avoids. Clicking the row restarts it
+      // in place under the new name. Deliberately not resurrected with `-A`
+      // here: a rename should not start a process.
     }
   }
   provider.refresh();
@@ -576,7 +610,7 @@ async function quickSwitch(provider: DtachTreeProvider): Promise<void> {
     { placeHolder: 'Attach dtach session' }
   );
   if (pick) {
-    await attach(pick.session);
+    await attach(provider, pick.session);
   }
 }
 
@@ -1187,7 +1221,7 @@ export function activate(context: vscode.ExtensionContext): void {
       openInFolder(provider, uri)
     ),
     vscode.commands.registerCommand('dtachSessions.attach', (item: SessionItem | DtachSession) =>
-      attach(toSession(item))
+      attach(provider, toSession(item))
     ),
     vscode.commands.registerCommand('dtachSessions.rename', (item: SessionItem | DtachSession) =>
       rename(provider, toSession(item))

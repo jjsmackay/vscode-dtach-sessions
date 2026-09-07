@@ -18,8 +18,10 @@ When the liveness source cannot be read (a non-Linux remote host, or a restricte
 environment), every session SHALL be treated as alive, preserving the behaviour
 that existed before liveness detection.
 
-Liveness SHALL NOT change how a session is listed, named, ordered, or iconified;
-a session with no master remains listed and continues to present as detached.
+Liveness SHALL NOT introduce a distinct presentation of its own: a session with
+no master remains listed, keeps its name, and continues to present as detached.
+Its recorded Claude status is suppressed as required below, which is the only
+way liveness reaches the row's badge, icon, or status ordering.
 
 #### Scenario: Socket with a live master
 

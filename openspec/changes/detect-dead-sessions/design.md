@@ -75,11 +75,18 @@ Alternatives considered:
   but catches only reboot-stale, not a mid-session OOM kill. `/proc/net/unix`
   subsumes it.
 
-Caveat: `/proc/net/unix` records the path as passed to `bind()`. The extension
-always passes absolute paths, so an exact string join is sound; a socket someone
-bound relatively by hand appears under a bare basename and would read as dead —
-and would then be restarted in place on click, which is the same outcome the user
-wanted.
+Caveat, found while verifying: `/proc/net/unix` does **not** always record the
+path dtach was given. A unix socket address is capped at 108 bytes (`sun_path`),
+and dtach works around that by `chdir`ing to the socket's directory and binding
+the bare basename. So a socket under the default `~/.dtach-sessions` is recorded
+absolute, while one whose path exceeds the cap — a long `socketDir`, or a long
+session name — is recorded as its basename alone. An exact-path match therefore
+read *every* session on a long path as dead, and clicking a live one would have
+skipped reaping, re-run `startupCommand` into it, and claimed it was restarted.
+
+`socketIsBound` accepts either form. The basename match cannot practically
+collide, because socket names carry a `_<hash>` minted per session, and it errs
+toward "alive" — which is only ever a return to pre-liveness behaviour.
 
 ### D2: Liveness is per-refresh, not resolved once at activation
 
@@ -126,6 +133,16 @@ the restart proceeds and reports itself once, naming the cause (host restart or 
 killed dtach process) and the consequence (previous output is gone). An
 information message, not a warning: nothing is wrong, and nothing needs fixing.
 
+### D5a: `refreshWhenReady` waits on liveness, not existence
+
+`refreshWhenReady` polled `fs.existsSync(socket)`, which is exactly the condition
+that is already true on the restart path — the socket file is what survived the
+dead master — so it would have refreshed before dtach re-bound and left the row
+reading dead. It now polls `socketIsBound`, which is the condition both callers
+actually want (a new socket appears and binds near-simultaneously, so the create
+path is unaffected), retiring the existence proxy rather than special-casing the
+new caller.
+
 ### D5: Status suppression, not status deletion
 
 A dead session resolves to no effective run-state, so its row description, its
@@ -135,11 +152,31 @@ status file is left on disk: `removeStatus` fires on kill, where the user has
 expressed intent, and the deliberate rule that `waiting` and `done` never decay
 stays untouched.
 
-### D6: The `dtachPath` misdiagnosis needs no spec change
+### D6: The `dtachPath` misdiagnosis needs no spec change, but the attach path is not the only one
 
-With the attach guard in place no doomed terminal is created, so a fast close on
-the attach path once again means what `launch-diagnostics` says it means. Its
-requirements stay true as written and need no delta.
+With the attach guard in place no doomed terminal is created there, so a fast
+close once again means what `launch-diagnostics` says it means. Its requirements
+stay true as written and need no delta.
+
+The guard on `attach` alone is not enough, though. Review traced every path that
+reaches `trackTerminal` — the only setter of the fast-close stamp — and found a
+second unguarded `-a` launch: `rename`, when `reflectProcessTitle` is off,
+disposes the matched terminal and relaunches `-a` against the moved socket. A
+matched terminal does not prove a live master, so renaming a dead session could
+still produce the exact misdiagnosis this change exists to remove. `rename` now
+skips the relaunch when the master is gone, leaving the row detached rather than
+resurrecting it — a rename should not start a process.
+
+`copyAttachCommand` shares the root at much lower stakes: it hands over
+`dtach -a <dead socket>`, which fails in the user's own shell with the honest
+`Connection refused`. Left alone deliberately — it copies an *attach* command,
+and silently handing back a `-A` that creates a session would misrepresent what
+was copied.
+
+The reviewed alternative was a single liveness-aware `attachArgs(session,
+redrawMethod)` behind all three `-a` constructions. Rejected: it would make
+`rename` and a copied command silently start processes, which is a bigger
+behaviour change than the misdiagnosis it fixes.
 
 ## Risks / Trade-offs
 

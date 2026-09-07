@@ -44,6 +44,9 @@ export function expandHome(p: string): string {
  * listening rows (`St 01`) count: a path is also recorded for each accepted
  * connection, so a client wedged on a socket whose master died would otherwise
  * read as alive.
+ *
+ * Paths are returned exactly as the kernel recorded them, which is not always
+ * the path dtach was given — see `socketIsBound`.
  */
 export function readBoundSockets(): Set<string> | undefined {
   let text: string;
@@ -63,6 +66,25 @@ export function readBoundSockets(): Set<string> | undefined {
     }
   }
   return out;
+}
+
+/**
+ * Whether `socket` has a listening master in a `readBoundSockets` set.
+ *
+ * Two forms have to be accepted, because a unix socket address is capped at 108
+ * bytes (`sun_path`) and dtach works around that by `chdir`ing to the socket's
+ * directory and binding the **bare basename**. So a short path is recorded
+ * absolute, and a path over the cap — a long `socketDir`, or a long session name
+ * — is recorded as its basename alone. Matching only the absolute form read
+ * every session on a long path as dead.
+ *
+ * The basename match is safe to accept: socket names carry a `_<hash>` minted
+ * per session, so a collision with an unrelated directory's socket is
+ * negligible — and it errs toward "alive", which merely restores the behaviour
+ * that existed before liveness detection.
+ */
+export function socketIsBound(bound: Set<string>, socket: string): boolean {
+  return bound.has(socket) || bound.has(path.basename(socket));
 }
 
 export type SortBy = 'created' | 'lastAttached' | 'name' | 'status';
@@ -251,10 +273,10 @@ export function hashOf(socketBasename: string): string | undefined {
  * (removal is `removeStatus` on kill, where the user has expressed intent) so
  * the deliberate no-decay rule for `waiting`/`done` is untouched. */
 export function statusFor(
-  session: { socket: string; alive?: boolean },
+  session: { socket: string; alive: boolean },
   statuses: Map<string, SessionStatus> | undefined
 ): SessionStatus | undefined {
-  if (!statuses || session.alive === false) {
+  if (!statuses || !session.alive) {
     return undefined;
   }
   const hash = hashOf(path.basename(session.socket));
@@ -317,24 +339,39 @@ export function rekeyTerminal(oldSocket: string, newSocket: string): void {
  */
 export function findTerminalForSocket(session: { name: string; socket: string }): vscode.Terminal | undefined {
   for (const t of vscode.window.terminals) {
-    if (socketFromTerminal(t) === session.socket) {
+    if (isLiveTerminal(t) && socketFromTerminal(t) === session.socket) {
       return t;
     }
   }
   const registered = terminalRegistry.get(session.socket);
-  if (registered && vscode.window.terminals.includes(registered)) {
+  if (registered && isLiveTerminal(registered) && vscode.window.terminals.includes(registered)) {
     return registered;
   }
   // When the terminal is named after the session (reflectProcessTitle off), a
   // restored terminal that lost its shellArgs can still be matched by name.
   if (!config().reflectProcessTitle) {
     for (const t of vscode.window.terminals) {
-      if (socketFromTerminal(t) === undefined && t.name === session.name) {
+      if (isLiveTerminal(t) && socketFromTerminal(t) === undefined && t.name === session.name) {
         return t;
       }
     }
   }
   return undefined;
+}
+
+/**
+ * Whether VS Code still has a running process behind this terminal. An exited
+ * terminal lingers in `window.terminals` until its tab is closed, and is never a
+ * valid attach target — its dtach client is gone. This matters most on the
+ * restart-in-place path: a client cannot outlive its master, so a session whose
+ * master died mid-session (OOM kill) is guaranteed to have an exited terminal
+ * still matching its socket, and reusing that corpse would `show()` a dead tab
+ * and skip the restart entirely. Every other caller wants the same thing —
+ * an exited terminal is not "attached", holds no reapable client pid, and
+ * cannot be renamed into.
+ */
+function isLiveTerminal(t: vscode.Terminal): boolean {
+  return t.exitStatus === undefined;
 }
 
 /** A compact relative age such as "2h ago" derived from a mtime. */
@@ -609,7 +646,7 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
         socket,
         mtimeMs: st.mtimeMs,
         ctimeMs: st.ctimeMs,
-        alive: !bound || bound.has(socket),
+        alive: !bound || socketIsBound(bound, socket),
       });
     }
     switch (sortBy) {

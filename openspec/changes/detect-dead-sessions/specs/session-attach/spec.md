@@ -36,6 +36,10 @@ confirmation, since the previous output is unrecoverable either way.
 - **WHEN** the user clicks a session whose socket has no dtach master
 - **THEN** a fresh master is started on the same socket path, a terminal opens attached to it, and the row keeps its name and hash
 
+#### Scenario: An exited terminal is not reused instead of restarting
+- **WHEN** the user clicks a session whose socket has no dtach master while a terminal for that session is still open but its process has exited
+- **THEN** the exited terminal is not treated as an existing attachment, and the session is restarted in place
+
 #### Scenario: The previous working directory is not recovered
 - **WHEN** a session is restarted in place
 - **THEN** the terminal opens at the default working directory, because the previous shell's cwd went with its process
