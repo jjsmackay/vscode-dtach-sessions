@@ -55,3 +55,34 @@ confirmation, since the previous output is unrecoverable either way.
 #### Scenario: No doomed terminal is created
 - **WHEN** the user clicks a session whose socket has no dtach master
 - **THEN** no terminal is created that attaches to the dead socket, and no warning naming `dtachSessions.dtachPath` is shown
+
+### Requirement: Reuse existing terminal
+Clicking a session that already has a live terminal SHALL focus that terminal rather than opening a second attach. The lookup SHALL query the live `vscode.window.terminals` list rather than an in-memory map, so reuse survives a window reload — which restores terminals but restarts the extension host.
+
+A terminal SHALL be matched to a session by, in order: (1) the socket path in the terminal's launch args (`shellArgs`); then (2) a persisted `socket → processId` association recorded at attach/create time, compared against the terminal's `processId`. The pid fallback is required because a window reload destroys a restored terminal's `shellArgs` while preserving its `processId`, and because — when `reflectProcessTitle` is `true` — there is no API name to match on. When `reflectProcessTitle` is `false`, an additional fallback to `terminal.name === session display name` MAY be used.
+
+A terminal whose process has exited SHALL NOT be matched by any of those rules.
+VS Code keeps an exited terminal in `vscode.window.terminals` until its tab is
+closed, and such a terminal is not an attachment: its dtach client is gone. This
+is load-bearing for restarting a session in place, because a dtach client cannot
+outlive its master — so a session whose master died mid-session is certain to
+have an exited terminal still matching its socket, and matching it would focus a
+dead tab instead of restarting the session.
+
+The persisted association SHALL be recorded in `workspaceState` when a terminal is attached or created, and SHALL be removed when that terminal is closed.
+
+#### Scenario: Repeat click focuses existing terminal
+- **WHEN** user clicks a session that already has a live terminal
+- **THEN** the existing terminal is shown and no second terminal is created
+
+#### Scenario: Reuse after window reload
+- **WHEN** the user reloads the window with a session's terminal open, then clicks that session
+- **THEN** the restored terminal is matched by its persisted `processId` and focused, and no second terminal is created
+
+#### Scenario: Click after terminal closed
+- **WHEN** the user closed the session's terminal and then clicks the session again
+- **THEN** a new terminal is created and attached, and a fresh `socket → processId` association is recorded
+
+#### Scenario: An exited terminal is not matched
+- **WHEN** a session's terminal process has exited but its tab is still open, and the user clicks that session
+- **THEN** the exited terminal is not matched, and the session is attached (or restarted in place, if its master is gone) in a new terminal
