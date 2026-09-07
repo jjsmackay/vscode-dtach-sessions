@@ -9,10 +9,12 @@ master, typically because the host restarted — the extension SHALL start a fre
 master on the **same** socket path rather than attaching to a socket that cannot
 serve the connection.
 
-The restart SHALL preserve the session's display name, its `_<hash>`
-rename-invariant id, and its working directory, and SHALL run the configured
-startup command as session creation does. It SHALL NOT mint a new socket path or
-hash.
+The restart SHALL preserve the session's display name and its `_<hash>`
+rename-invariant id, and SHALL run the configured startup command as session
+creation does. It SHALL NOT mint a new socket path or hash.
+
+The restart SHALL NOT be required to reopen in the previous session's working
+directory: that directory was a property of the shell process, which is gone.
 
 The restart SHALL report itself once as information — naming the cause and
 stating that the previous session's output is gone — and SHALL NOT ask for
@@ -33,6 +35,10 @@ confirmation, since the previous output is unrecoverable either way.
 #### Scenario: Clicking a session whose master is gone restarts it in place
 - **WHEN** the user clicks a session whose socket has no dtach master
 - **THEN** a fresh master is started on the same socket path, a terminal opens attached to it, and the row keeps its name and hash
+
+#### Scenario: The previous working directory is not recovered
+- **WHEN** a session is restarted in place
+- **THEN** the terminal opens at the default working directory, because the previous shell's cwd went with its process
 
 #### Scenario: The restart is reported once
 - **WHEN** a session is restarted in place because its socket had no master

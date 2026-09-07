@@ -232,8 +232,40 @@ async function showOrCreateTerminal(
   return term;
 }
 
-async function attach(session: { name: string; socket: string }): Promise<void> {
-  const { redrawMethod, dtachPath } = config();
+/**
+ * Attach to a session, or restart it in place when its socket outlived its
+ * master (host reboot, OOM kill, `kill -9`). `dtach -a` on such a socket exits
+ * within milliseconds with `Connection refused` AND a success status, so it
+ * lands inside the fast-close window and would be misreported as a
+ * `dtachSessions.dtachPath` problem; branching before any terminal is created
+ * both avoids the doomed terminal and leaves that warning meaning what it says.
+ *
+ * The restart re-binds the SAME socket path with `-A`, so the session keeps its
+ * display name and its `_<hash>` rename-invariant id — and with them its status
+ * file and its socket-to-pid registry key. It is deliberately not routed through
+ * `restart`, which mints a fresh hash and socket and would orphan both. The
+ * scrollback died with the master and cannot be recovered either way, so the
+ * restart reports itself rather than asking: there is no choice to offer. The
+ * old shell's cwd went with the process too, so the terminal opens at the
+ * default — unlike `restart`, which can read cwd off a still-live process.
+ */
+async function attach(session: DtachSession): Promise<void> {
+  const { redrawMethod, dtachPath, startupCommand } = config();
+  if (session.alive === false) {
+    // A socket with no master has no clients either, so no reap on this path.
+    const args = ['-A', session.socket, ...redrawArgs(redrawMethod), SHELL];
+    const term = await showOrCreateTerminal(session, args, dtachPath);
+    if (term) {
+      if (startupCommand) {
+        term.sendText(startupCommand, true);
+      }
+      void vscode.window.showInformationMessage(
+        `dtach Sessions: "${session.name}" was restarted — its dtach process was gone ` +
+          `(the host restarted, or it was killed), so the previous output is lost.`
+      );
+    }
+    return;
+  }
   const args = ['-a', session.socket, ...redrawArgs(redrawMethod)];
   await showOrCreateTerminal(session, args, dtachPath, undefined, true);
 }

@@ -22,9 +22,10 @@ of reporting it.
   path, a dead one holds nothing while the file persists. One file read per
   refresh, no subprocess, and no connection to a live master.
 - Attaching to a session whose socket has no master restarts it in place with
-  `dtach -A` on the same path — same display name, same `_<hash>`, same working
-  directory, `startupCommand` re-run — and says so once, because the previous
-  scrollback died with the master and the user should know why it is gone.
+  `dtach -A` on the same path — same display name, same `_<hash>`,
+  `startupCommand` re-run — and says so once, because the previous scrollback
+  died with the master and the user should know why it is gone. The old shell's
+  working directory went with its process, so the terminal opens at the default.
 - A dead session presents no Claude run-state and does not contribute to the
   activity-bar waiting count, so the ghost bell disappears. The deliberate
   no-decay rule for `waiting`/`done` is untouched; suppression happens at read

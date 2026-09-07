@@ -107,10 +107,15 @@ path, attach *can*, so the whole surface was cut:
 
 What remains is one branch on the attach path: alive → `-a` as today; dead →
 the create path's `-A` against the **existing** socket, preserving the display
-name, the `_<hash>` rename-invariant id, and the working directory, so the status
-file, the persisted socket-to-pid key, and the family/cwd model all stay
-associated with the row. `restartSession` cannot be reused: it mints a fresh hash
-and socket, orphaning the status file.
+name and the `_<hash>` rename-invariant id, so the status file and the persisted
+socket-to-pid key stay associated with the row. `restart` cannot be reused: it
+mints a fresh hash and socket, orphaning the status file.
+
+The working directory is **not** preserved, and cannot be: `sessionCwd` reads it
+off a still-live process (the master's shell child, via `lsof`), and a dead
+session has no such process. `restart` can reopen in place because it kills a
+*live* session; this path has nothing to read. The terminal opens at the default,
+and the spec says so rather than promising otherwise.
 
 ### D4: The restart is announced, not silent
 

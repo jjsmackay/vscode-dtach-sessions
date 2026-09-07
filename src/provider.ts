@@ -8,6 +8,10 @@ export interface DtachSession {
   socket: string;
   mtimeMs: number;
   ctimeMs: number;
+  /** A dtach master is still listening on `socket` — see `readBoundSockets`. A
+   * socket file outlives an abnormally-killed master, so this is the only
+   * trustworthy "can this session be attached?" signal. */
+  alive: boolean;
 }
 
 /** Expand a leading ~ to the home directory. */
@@ -19,6 +23,46 @@ export function expandHome(p: string): string {
     return path.join(os.homedir(), p.slice(2));
   }
   return p;
+}
+
+/**
+ * The unix-socket paths the kernel currently has a listener bound to, read from
+ * `/proc/net/unix`. A dtach master binds and listens on its socket, so its path
+ * is here for as long as the master lives — and gone the moment it dies, even
+ * though the socket FILE survives an abnormal exit (host reboot, OOM kill,
+ * `kill -9`; a clean dtach exit unlinks it). `st.isSocket()` cannot tell those
+ * apart; this can.
+ *
+ * `undefined` means the table could not be read (a non-Linux remote host, or a
+ * restricted container). Callers MUST then treat every session as alive, so
+ * behaviour collapses to what it was before liveness detection existed.
+ *
+ * Read in-process rather than probed. A `connect()` test would touch a live
+ * master — which tees one pty to every client under a shared winsize — on every
+ * refresh, and `pgrep`-style matching would count any process whose cmdline
+ * merely mentions the path, including the shell doing the matching. Only the
+ * listening rows (`St 01`) count: a path is also recorded for each accepted
+ * connection, so a client wedged on a socket whose master died would otherwise
+ * read as alive.
+ */
+export function readBoundSockets(): Set<string> | undefined {
+  let text: string;
+  try {
+    text = fs.readFileSync('/proc/net/unix', 'utf8');
+  } catch {
+    return undefined;
+  }
+  const out = new Set<string>();
+  for (const line of text.split('\n')) {
+    // Num RefCount Protocol Flags Type St Inode Path — 8 fields when the socket
+    // is bound to a path, 7 when it is unnamed. Rejoining the tail keeps a path
+    // containing spaces intact (a configurable socketDir may hold one).
+    const parts = line.split(/\s+/);
+    if (parts.length >= 8 && parts[5] === '01') {
+      out.add(parts.slice(7).join(' '));
+    }
+  }
+  return out;
 }
 
 export type SortBy = 'created' | 'lastAttached' | 'name' | 'status';
@@ -199,12 +243,18 @@ export function hashOf(socketBasename: string): string | undefined {
 
 /** Join a session to its live status from an already-loaded status map (see
  * `readStatuses`), by socket hash. `statuses` undefined (status feature off)
- * always yields undefined. */
+ * always yields undefined, and so does a session whose master is gone: a
+ * recorded state cannot be current when the process that recorded it is not
+ * running. Suppressing here — the one join every consumer goes through — is
+ * what keeps the row badge, the row icon, the activity-bar waiting count, and
+ * the `status` sort order from disagreeing, and it leaves the status FILE alone
+ * (removal is `removeStatus` on kill, where the user has expressed intent) so
+ * the deliberate no-decay rule for `waiting`/`done` is untouched. */
 export function statusFor(
-  session: { socket: string },
+  session: { socket: string; alive?: boolean },
   statuses: Map<string, SessionStatus> | undefined
 ): SessionStatus | undefined {
-  if (!statuses) {
+  if (!statuses || session.alive === false) {
     return undefined;
   }
   const hash = hashOf(path.basename(session.socket));
@@ -535,6 +585,10 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
       );
       return [];
     }
+    // One liveness read per listing, joined per row below: correct on the first
+    // getChildren at activation AND on every later refresh, where an
+    // activation-time snapshot would go stale the moment a master died.
+    const bound = readBoundSockets();
     const sessions: DtachSession[] = [];
     for (const f of entries) {
       if (!f.startsWith(socketPrefix) || !f.endsWith('.dtach')) {
@@ -550,7 +604,13 @@ export class DtachTreeProvider implements vscode.TreeDataProvider<SessionItem> {
       if (!st.isSocket()) {
         continue;
       }
-      sessions.push({ name: displayName(f, socketPrefix), socket, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs });
+      sessions.push({
+        name: displayName(f, socketPrefix),
+        socket,
+        mtimeMs: st.mtimeMs,
+        ctimeMs: st.ctimeMs,
+        alive: !bound || bound.has(socket),
+      });
     }
     switch (sortBy) {
       case 'lastAttached':
