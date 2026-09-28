@@ -703,9 +703,13 @@ function pgrepSocketCommand(session: { socket: string }): string {
     : `pgrep -f ${shellEscape(escapeRegex(session.socket))}`;
 }
 
+/** The invoking `sh -c` embeds the socket path in its own cmdline, so the pgrep
+ *  fallback matches it; `grep -vx "$$"` drops it. Unfiltered, killOne on a dead
+ *  session (no master, so the shell is the only match) SIGKILLed itself before
+ *  `rm -f` ran. The `$(…)` subshell also matches but has exited by use. */
 function resolvePidsCommand(session: { socket: string }): string {
   const sock = shellEscape(session.socket);
-  return `lsof -t ${sock} 2>/dev/null || ${pgrepSocketCommand(session)} 2>/dev/null`;
+  return `{ lsof -t ${sock} 2>/dev/null || ${pgrepSocketCommand(session)} 2>/dev/null; } | grep -vx "$$"`;
 }
 
 // --- Stale client reaping -----------------------------------------------------
