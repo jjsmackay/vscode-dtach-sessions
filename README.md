@@ -36,8 +36,8 @@ about the terminal round-trips a UI over the wire.
 2. Install the extension on that host (see [Installing](#installing)).
 3. Open the **dtach Sessions** view in the activity bar and press **+**. Name the
    session; a terminal opens running your shell under dtach.
-4. Close the window, drop your SSH connection, reload VS Code. Reopen the view,
-   click the row, and you are back in the same session.
+4. Close the window, drop your SSH connection, reload VS Code. The sessions you
+   had attached reattach on their own; any other session is a click away.
 
 Point `dtachSessions.startupCommand` at `claude` (or any program) to launch it
 automatically in every new session.
@@ -58,6 +58,17 @@ Clicking a row attaches the session. If a terminal for it is already open, VS
 Code focuses that one instead of stacking a second client on the socket. The list
 refreshes when you create a session, when the view becomes visible, and on the
 title-bar refresh button.
+
+### Reattach on startup
+
+When a window opens, after a reload or a full restart, it reattaches the sessions
+that were attached in it when it closed. Detaching a session or closing its tab
+takes it off that list. A session whose dtach process is gone is not restarted;
+click it to restart it in place. Set `dtachSessions.reattachOnStartup` to `false`
+to start every session detached instead.
+
+VS Code never restores session terminals itself. Left to it, a full restart
+brings back the tab and its old output but runs a plain shell in it, not dtach.
 
 ### Sessions that outlived their dtach process
 
@@ -150,6 +161,7 @@ Linux hosts only, and the forwarder needs `python3` on the host. See the
 | `dtachSessions.reflectProcessTitle` | `true` | Let the running program's title drive the terminal tab (e.g. an agent CLI's live status). The session name still labels the sidebar row. Set `false` to pin the session name on the tab. |
 | `dtachSessions.showClaudeStatus` | `true` | Show a Claude instance's live run-state (working / tool / waiting / done / idle) on each row. Needs the status hooks. Linux only. |
 | `dtachSessions.reapStaleClientsOnAttach` | `true` | Reap orphaned dtach clients before attaching so the new client redraws cleanly. Disable if you deliberately attach one session from several windows. Never touches the session itself. Linux only. |
+| `dtachSessions.reattachOnStartup` | `true` | Reattach, when the window opens, the sessions that were attached in it when it closed. Sessions whose dtach process is gone are left for you to click. |
 
 ## Requirements
 
@@ -189,6 +201,13 @@ detach, so reattaching at the same size can leave a TUI blank until the next
 resize. `ctrl_l` forces a redraw regardless of size, but it sends a literal
 Ctrl-L, which some TUIs (Claude among them) read as a clear-screen keystroke.
 Pick the trade-off that suits you.
+
+### Reload and restart (`reattachOnStartup`)
+
+A reload closes session terminals and reattaches them, rather than letting VS
+Code keep them. The redraw repaints the current screen, which is all a TUI like
+Claude needs, but VS Code's scrollback for the tab, the tab order and any splits
+start fresh. dtach keeps no scrollback of its own.
 
 ### Terminal title (`reflectProcessTitle`)
 
@@ -235,7 +254,10 @@ No unit suite. Run through these against a build:
    terminal relabel, and the session stays live.
 5. Kill `api`: the process is gone (`pgrep -f _<hash>.dtach` finds nothing) and
    the socket is removed. Renaming did not orphan it.
-6. Reload the remote window, click a session: it reattaches.
+6. With two sessions attached, reload the remote window: both reattach, each
+   once, and focus stays put. Fully close and reopen VS Code: the same, with no
+   plain-shell tab left behind for either session. Detach one first and only
+   the other comes back.
 7. Select several rows → Kill, or Kill All from the `…` menu: all gone.
 8. Drag-select and right-click copy work natively in the attached terminal.
 9. Kill a session's dtach process without removing its socket

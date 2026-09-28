@@ -32,41 +32,43 @@ const SHELL = process.env.SHELL || '/bin/bash';
 // we fall back to launching dtach directly there.
 const HAS_BASH = fs.existsSync('/bin/bash');
 
-// Persisted socket -> pid map. Survives a window reload (which strips a restored
-// terminal's shellArgs but keeps its pid) and is rebuilt into the in-memory
-// reattach registry on activate. Lives in workspaceState — per-window, no need
-// to outlast a full editor restart, which does not restore terminals anyway.
-const PID_MAP_KEY = 'dtachSessions.socketPids';
+// Persisted, ordered list of the sockets attached in this window. Attach
+// terminals are transient (VS Code neither revives them after a restart nor
+// reconnects them after a reload — a revived one is a plain shell posing as the
+// session), so this list is how activation knows what to reattach. Lives in
+// workspaceState: per-window, like the terminals it stands for. An entry leaves
+// only on an explicit end of attachment (tab closed, detach, kill, client exit),
+// never when the window itself goes away — see onDidCloseTerminal.
+const ATTACHED_KEY = 'dtachSessions.attachedSockets';
+// Pre-transient key (socket -> pid). Read once on activate to seed the list.
+const LEGACY_PID_MAP_KEY = 'dtachSessions.socketPids';
 let mementoState: vscode.Memento | undefined;
 
-function pidMap(): Record<string, number> {
-  return mementoState?.get<Record<string, number>>(PID_MAP_KEY, {}) ?? {};
+function attachedSockets(): string[] {
+  return mementoState?.get<string[]>(ATTACHED_KEY, []) ?? [];
 }
 
-/** Read-modify-write the persisted socket->pid map: set a pid, or clear it (pid null). */
-function updatePidMap(socket: string, pid: number | null): void {
-  if (!mementoState) {
-    return;
+function setAttachedSockets(sockets: string[]): void {
+  void mementoState?.update(ATTACHED_KEY, sockets);
+}
+
+function markAttached(socket: string): void {
+  const list = attachedSockets();
+  if (!list.includes(socket)) {
+    setAttachedSockets([...list, socket]);
   }
-  const map = pidMap();
-  if (pid === null) {
-    delete map[socket];
-  } else {
-    map[socket] = pid;
+}
+
+function markDetached(socket: string): void {
+  const list = attachedSockets();
+  if (list.includes(socket)) {
+    setAttachedSockets(list.filter((s) => s !== socket));
   }
-  void mementoState.update(PID_MAP_KEY, map);
 }
 
-function persistPid(socket: string, term: vscode.Terminal): void {
-  void term.processId.then((pid) => {
-    if (pid) {
-      updatePidMap(socket, pid);
-    }
-  });
-}
-
-function dropPid(socket: string): void {
-  updatePidMap(socket, null);
+/** Re-point an entry at a renamed socket, keeping its place in the order. */
+function rekeyAttached(oldSocket: string, newSocket: string): void {
+  setAttachedSockets(attachedSockets().map((s) => (s === oldSocket ? newSocket : s)));
 }
 
 // Creation time of each terminal WE created (keyed by the terminal itself), for
@@ -75,15 +77,15 @@ function dropPid(socket: string): void {
 // for both launch paths (bash `exec` exiting 127, and a bad direct shellPath),
 // so the fast close is the only trustworthy signal — an extension-host PATH
 // probe would false-negative because the host does not source .bashrc (see the
-// change design, decision D1). Reload-restored terminals are reconciled via
-// registerTerminal, not trackTerminal, so they carry no stamp and never warn.
+// change design, decision D1). Only terminals created in this activation carry a
+// stamp, so one carried over from before activation never warns.
 const LAUNCH_FAIL_WINDOW_MS = 1500;
 const terminalCreatedAt = new Map<vscode.Terminal, number>();
 
-/** Record a freshly created terminal for reattach: in-memory registry + persisted pid. */
+/** Record a freshly created terminal: in-memory registry + persisted attached list. */
 function trackTerminal(socket: string, term: vscode.Terminal): void {
   registerTerminal(socket, term);
-  persistPid(socket, term);
+  markAttached(socket);
   terminalCreatedAt.set(term, Date.now());
 }
 
@@ -93,7 +95,7 @@ function trackTerminal(socket: string, term: vscode.Terminal): void {
  * dtachSessions.dtachPath setting. Always clears the terminal's creation stamp.
  * Keys on ownership + timing only (not exit code): the direct launch path may
  * report no code, and a genuine session lives far longer than the window, so a
- * normal exit, Kill, detach, or reload-restored terminal never trips it.
+ * normal exit, Kill, detach, or pre-activation terminal never trips it.
  */
 function maybeWarnLaunchFailure(term: vscode.Terminal): void {
   const created = terminalCreatedAt.get(term);
@@ -115,30 +117,50 @@ function maybeWarnLaunchFailure(term: vscode.Terminal): void {
 }
 
 /**
- * Rebuild the reattach registry after a window reload. Restored terminals have
- * lost their shellArgs but kept their processId, so match live terminals' pids
- * against the persisted socket->pid map; prune entries whose terminal is gone.
+ * One-off migration from the pre-transient socket->pid map: its keys are exactly
+ * the sockets that were attached in this window, so they seed the attached list.
+ * The terminals restored under the old scheme can't be matched (no pid map any
+ * more); the reattach's stale-client reap kills their clients, since their pids
+ * aren't among this window's live terminals.
  */
-async function reconcileTerminals(provider: DtachTreeProvider): Promise<void> {
-  if (!mementoState) {
+async function migrateLegacyPidMap(): Promise<void> {
+  const legacy = mementoState?.get<Record<string, number>>(LEGACY_PID_MAP_KEY);
+  if (!mementoState || !legacy) {
     return;
   }
-  const byPid = new Map<number, string>();
-  for (const [socket, pid] of Object.entries(pidMap())) {
-    byPid.set(pid, socket);
+  const list = attachedSockets();
+  await mementoState.update(ATTACHED_KEY, [
+    ...list,
+    ...Object.keys(legacy).filter((s) => !list.includes(s)),
+  ]);
+  await mementoState.update(LEGACY_PID_MAP_KEY, undefined);
+}
+
+/**
+ * Reattach the sessions this window had attached when it last closed or
+ * reloaded. Only sessions that still exist and have a live master: reattach must
+ * never start a process (a restart would replay startupCommand on every host
+ * reboot), so a dead or vanished entry is pruned and left for the user to click.
+ * Goes through the ordinary fresh-attach path — reap included, since a client
+ * can outlive its window on an SSH drop — but without taking focus. Sequential,
+ * so one socket's reap and processId resolution finish before the next starts.
+ */
+async function reattachOnStartup(provider: DtachTreeProvider): Promise<void> {
+  await migrateLegacyPidMap();
+  const { reattachOnStartup: enabled, redrawMethod, dtachPath } = config();
+  if (!enabled) {
+    return;
   }
-  const terminals = vscode.window.terminals;
-  const pids = await Promise.all(terminals.map((t) => t.processId));
-  const survivors: Record<string, number> = {};
-  terminals.forEach((t, i) => {
-    const pid = pids[i];
-    if (pid && byPid.has(pid)) {
-      const socket = byPid.get(pid)!;
-      registerTerminal(socket, t);
-      survivors[socket] = pid;
+  const bySocket = new Map(provider.listSessions().map((s) => [s.socket, s]));
+  for (const socket of attachedSockets()) {
+    const session = bySocket.get(socket);
+    if (!session || !session.alive) {
+      markDetached(socket);
+      continue;
     }
-  });
-  await mementoState.update(PID_MAP_KEY, survivors);
+    const args = ['-a', session.socket, ...redrawArgs(redrawMethod)];
+    await showOrCreateTerminal(session, args, dtachPath, undefined, true, false);
+  }
   provider.refresh();
 }
 
@@ -200,11 +222,14 @@ async function showOrCreateTerminal(
   args: string[],
   dtachPath: string,
   cwd?: string,
-  reapOnCreate = false
+  reapOnCreate = false,
+  show = true
 ): Promise<vscode.Terminal | undefined> {
   const existing = findTerminalForSocket(session);
   if (existing) {
-    existing.show();
+    if (show) {
+      existing.show();
+    }
     return undefined;
   }
   if (reapOnCreate && config().reapStaleClientsOnAttach) {
@@ -235,9 +260,16 @@ async function showOrCreateTerminal(
   } else {
     options = { shellPath: dtachPath, shellArgs: args, cwd };
   }
+  // Transient: VS Code must neither revive this terminal after a restart (it
+  // would replay the scrollback into a plain shell that merely looks like the
+  // session) nor reconnect it after a reload. reattachOnStartup brings the
+  // session back instead, with its launch args intact.
+  options.isTransient = true;
   const term = vscode.window.createTerminal(options);
   trackTerminal(session.socket, term);
-  term.show();
+  if (show) {
+    term.show();
+  }
   return term;
 }
 
@@ -568,8 +600,7 @@ async function rename(provider: DtachTreeProvider, session: DtachSession): Promi
       // held by inode, not path — and there is no pinned tab name to rebuild, so
       // just re-point our tracking at the new socket. No dispose/reattach flash.
       rekeyTerminal(session.socket, newSocket);
-      dropPid(session.socket);
-      persistPid(newSocket, term);
+      rekeyAttached(session.socket, newSocket);
     } else {
       // VS Code has no terminal-rename API; dispose and reattach under the new
       // name (the close handler untracks the old terminal).
@@ -1185,9 +1216,9 @@ export function activate(context: vscode.ExtensionContext): void {
     canSelectMany: true,
   });
 
-  // Rebuild the reattach registry from the persisted pid map for terminals that
-  // a window reload restored before this activation.
-  void reconcileTerminals(provider);
+  // Session terminals are transient, so nothing was restored for them: bring
+  // back the ones this window had attached.
+  void reattachOnStartup(provider);
 
   // Keep the activity-bar waiting badge in sync. Every state transition that
   // matters already fires onDidChangeTreeData (status-file watch, terminal
@@ -1209,8 +1240,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidOpenTerminal(() => provider.refresh()),
     vscode.window.onDidCloseTerminal((t) => {
       const socket = unregisterTerminal(t);
-      if (socket) {
-        dropPid(socket);
+      // The window going away closes every terminal too; that must not count as
+      // the user ending the attachment, or nothing would be left to reattach.
+      if (socket && t.exitStatus?.reason !== vscode.TerminalExitReason.Shutdown) {
+        markDetached(socket);
       }
       maybeWarnLaunchFailure(t);
       provider.refresh();

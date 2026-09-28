@@ -160,15 +160,19 @@ On create, the extension SHALL generate a random 6-character lowercase-hex hash 
 - **THEN** the tree item label is `web` (the `_<hash>` and `.dtach` are stripped)
 
 ### Requirement: Created terminal naming
-A terminal opened by the create command (by name or for a folder) SHALL follow the same naming rule as attach: when `dtachSessions.reflectProcessTitle` is `true` (the default) it SHALL be created without an API `name` so the program's title drives the tab; when `false` it SHALL be named after the session display name. On create, the extension SHALL record a `socket → processId` association in `workspaceState` so the new terminal participates in reuse-after-reload identically to an attached one.
+A terminal opened by the create command (by name or for a folder) SHALL follow the same naming rule as attach: when `dtachSessions.reflectProcessTitle` is `true` (the default) it SHALL be created without an API `name` so the program's title drives the tab; when `false` it SHALL be named after the session display name. The terminal SHALL be transient, as attach terminals are, and on create the extension SHALL record the session in this window's persisted attached-sessions list so the new session is reattached on startup identically to an attached one.
 
 #### Scenario: Create with reflect enabled
 - **WHEN** `reflectProcessTitle` is `true` and the user creates a session `web`
-- **THEN** the terminal is created without an API name, and a `socket → processId` association for `web` is recorded
+- **THEN** the terminal is created without an API name, and `web` is recorded as attached in this window
 
 #### Scenario: Create with reflect disabled
 - **WHEN** `reflectProcessTitle` is `false` and the user creates a session `web`
 - **THEN** the terminal is created with `name: "web"` and the tab title is `web`
+
+#### Scenario: A created session is reattached after restart
+- **WHEN** the user creates a session `web`, then closes and reopens VS Code with `reattachOnStartup` enabled
+- **THEN** `web` is reattached without its startup command running again
 
 ### Requirement: Startup command on create
 The extension SHALL provide a `dtachSessions.startupCommand` setting (default empty). When non-empty, the configured command SHALL be sent to a session's shell immediately after the session is created (not when attaching to or reusing an existing session), so a fresh session can auto-run a program such as `claude`.

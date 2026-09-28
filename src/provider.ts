@@ -115,6 +115,7 @@ export interface DtachConfig {
   reflectProcessTitle: boolean;
   showClaudeStatus: boolean;
   reapStaleClientsOnAttach: boolean;
+  reattachOnStartup: boolean;
   sortBy: SortBy;
 }
 
@@ -130,6 +131,7 @@ export function config(): DtachConfig {
     reflectProcessTitle: c.get<boolean>('reflectProcessTitle', true),
     showClaudeStatus: c.get<boolean>('showClaudeStatus', true),
     reapStaleClientsOnAttach: c.get<boolean>('reapStaleClientsOnAttach', true),
+    reattachOnStartup: c.get<boolean>('reattachOnStartup', true),
     sortBy: (SORT_BY_VALUES as string[]).includes(sortBy) ? (sortBy as SortBy) : 'created',
   };
 }
@@ -308,12 +310,11 @@ export function socketFromTerminal(t: vscode.Terminal): string | undefined {
 }
 
 /**
- * Reattach registry: socket -> the terminal attached to it. Within a session it
- * is populated as terminals are created. After a window reload — which restores
- * terminals but strips their shellArgs — it is rebuilt by matching restored
- * terminals' processIds against a persisted socket->pid map (see extension.ts).
- * It is the rename-invariant, name-independent key that `findTerminalForSocket`
- * falls back to when a terminal's launch args are no longer visible.
+ * Reattach registry: socket -> the terminal attached to it, populated as this
+ * activation creates terminals. It is what `findTerminalForSocket` falls back to
+ * when a terminal's launch args no longer name its socket — a session renamed
+ * while attached keeps its live terminal, whose args still carry the old path.
+ * Session terminals are transient, so none survive a reload for it to rebuild.
  */
 const terminalRegistry = new Map<string, vscode.Terminal>();
 
@@ -344,13 +345,11 @@ export function rekeyTerminal(oldSocket: string, newSocket: string): void {
 
 /**
  * Find an open terminal attached to the given session. Queried live from
- * vscode.window.terminals (not an in-memory map) so it survives a window reload,
- * which restores terminals but restarts the extension host.
+ * vscode.window.terminals, so a terminal the user closed never matches.
  *
- * Matched in order: (1) the socket in the terminal's launch args (valid before a
- * reload and for freshly created terminals); (2) the reattach registry, keyed by
- * socket (valid after a reload, once rebuilt from the persisted pid map); and,
- * only when `reflectProcessTitle` is disabled, (3) the pinned terminal name.
+ * Matched in order: (1) the socket in the terminal's launch args; (2) the
+ * reattach registry, keyed by socket (covers rename-while-attached); and, only
+ * when `reflectProcessTitle` is disabled, (3) the pinned terminal name.
  */
 export function findTerminalForSocket(session: { name: string; socket: string }): vscode.Terminal | undefined {
   for (const t of vscode.window.terminals) {
@@ -362,8 +361,8 @@ export function findTerminalForSocket(session: { name: string; socket: string })
   if (registered && isLiveTerminal(registered) && vscode.window.terminals.includes(registered)) {
     return registered;
   }
-  // When the terminal is named after the session (reflectProcessTitle off), a
-  // restored terminal that lost its shellArgs can still be matched by name.
+  // When the terminal is named after the session (reflectProcessTitle off), one
+  // whose args don't name the socket can still be matched by name.
   if (!config().reflectProcessTitle) {
     for (const t of vscode.window.terminals) {
       if (isLiveTerminal(t) && socketFromTerminal(t) === undefined && t.name === session.name) {

@@ -41,12 +41,27 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
 - Socket names are `<prefix><name>_<hash>.dtach`. The `_<hash>` is a
   rename-invariant id: rename moves the socket keeping the hash; kill resolves
   the process by hash so renamed sessions aren't orphaned.
-- `findTerminalForSocket` queries `vscode.window.terminals` live (not an
-  in-memory map) so it survives a window reload, which restarts the extension
-  host but restores terminals. A reload **strips a restored terminal's
-  `shellArgs`** (the socket-in-args match then fails) but keeps its `processId`,
-  so reattach falls back to a socket→terminal registry rebuilt on activate by
-  matching live pids against a persisted `socket→pid` map (`workspaceState`).
+- Session terminals are **`isTransient: true`** (set once, in
+  `showOrCreateTerminal`): VS Code neither revives them after a full restart nor
+  reconnects them after a reload. Left persistent, a restart revives each one as
+  a **plain shell** in the old tab with its scrollback replayed. It has a new pid,
+  no `shellArgs`, and no API name under `reflectProcessTitle`, so nothing can
+  identify it. Instead, `workspaceState` holds an ordered **attached-sockets
+  list**, and `reattachOnStartup` (setting of the same name, default on)
+  reattaches each entry on activate through the normal fresh-attach path (reap
+  included, `show` false so focus isn't stolen). Live sessions only: a dead entry
+  is pruned, never restarted, because a restart would replay `startupCommand`
+  unasked on every reboot. The list must survive the window closing, so
+  `onDidCloseTerminal` removes an entry only when `exitStatus.reason !==
+  TerminalExitReason.Shutdown`. That's the API's own marker for "the window went
+  away" versus a tab close, Detach, or the client exiting. Trade-off: a reload
+  loses VS Code's scrollback, tab order and splits; the `-r` redraw repaints.
+  This replaced a `socket→pid` map plus reload reconciliation (reload used to
+  keep the pty but strip `shellArgs`); `migrateLegacyPidMap` seeds the list from
+  that old key once.
+- `findTerminalForSocket` queries `vscode.window.terminals` live, then falls back
+  to the in-memory registry, which only covers **rename-while-attached**: the
+  live terminal's args still name the old socket.
 - `dtachSessions.reflectProcessTitle` (default on) creates attach terminals
   **without** a fixed name so the program's title drives the tab; an API name's
   title source would otherwise override it. VS Code only honours an escape-set
@@ -54,8 +69,7 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
   launched via `bash -c 'exec -a "$0" "$@"' <name> <dtachPath> <args…>` so its
   `argv[0]` is the session name (VS Code reads `argv[0]` for the pre-title
   fallback). The socket stays a standalone `.dtach` arg so `socketFromTerminal`
-  still matches. With no API name to match on after a reload, the pid-keyed
-  registry above is what keeps reattach working.
+  still matches.
 - VS Code has no terminal-rename API. With `reflectProcessTitle` on, rename only
   re-keys the registry (the live attach survives the socket move by inode); with
   it off, rename disposes and recreates the terminal under the new name.
@@ -83,10 +97,8 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
   this window's live terminal pid (`findTerminalForSocket` → `term.processId`,
   which **is** the client pid because `exec -a` replaces bash in place). It
   returns `undefined` (skip) when a matched terminal's pid hasn't resolved, so a
-  live client is never killed mid-spawn — and this pid-diff is what spares a
-  reload-restored client (its pid survives and re-matches) where a blind
-  "kill every client on the socket" would not. Reap fires only on the
-  create-fresh branch of `showOrCreateTerminal` (making it and the attach path
+  live client is never killed mid-spawn. It does **not** spare another window's
+  client (hence the opt-out). Reap fires only on the create-fresh branch of `showOrCreateTerminal` (making it and the attach path
   async), never on reuse; `createSession` passes `reapOnCreate` false since a new
   socket can't have clients. Reaping only kills clients — master and socket
   survive. Manual `Reap Stale Clients` (row) / `Reap All Stale Clients` (view
@@ -214,4 +226,4 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
   filename). The provider holds a uri→session map re-keyed in `getChildren` via
   `sync()`, which fires `onDidChangeFileDecorations` for every row so dimming
   tracks attach-state on the same refresh signal as the icons; attach detection
-  reuses `findTerminalForSocket` (pid-registry-backed), so it survives a reload.
+  reuses `findTerminalForSocket`, so it tracks the same attach state as the icons.

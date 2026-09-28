@@ -366,6 +366,11 @@
           "default": true,
           "description": "Before attaching to a session, terminate any orphaned dtach clients left on its socket (e.g. a client wedged after a window close or SSH drop) so the new attach is the sole client and redraws cleanly. Disable if you deliberately attach the same session from more than one window. Reaping a client never affects the session itself. Linux remote hosts only (reads /proc)."
         },
+        "dtachSessions.reattachOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "When the window opens (after a reload or a full restart), reattach the sessions that were attached in it when it closed. Session terminals are never restored by VS Code itself — it would bring them back as plain shells — so with this off they stay detached until you attach them. Sessions whose dtach process is gone are not restarted."
+        },
         "dtachSessions.sortBy": {
           "type": "string",
           "enum": [

@@ -38,9 +38,17 @@ terminals matched to that socket. Detection SHALL be non-mutating.
 - **THEN** the master is excluded from the candidate set and never classified as stale
 
 #### Scenario: Restored terminal after reload is not stale
-- **WHEN** the window has been reloaded and a restored terminal's `processId`
-  still resolves to a live `-a` client on the socket
+- **WHEN** the window has been reloaded and the session reattached, and the
+  reattached terminal's `processId` resolves to a live `-a` client on the socket
 - **THEN** that client's pid matches the live-terminal set and it is not classified as stale
+
+#### Scenario: Client left behind by a closed window is stale
+- **WHEN** the window was closed or reloaded, its transient attach terminal's
+  client survived (e.g. the SSH link dropped before it could exit), and the
+  session is reattached on startup
+- **THEN** the surviving client's pid matches no live terminal in the window, it
+  is classified as stale, and the reattach reaps it before creating the new
+  terminal
 
 ### Requirement: Conservative handling of unresolved pids
 The extension SHALL NOT reap clients it cannot rule out as belonging to a live

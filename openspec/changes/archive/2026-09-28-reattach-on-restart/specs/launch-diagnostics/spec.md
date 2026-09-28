@@ -1,14 +1,6 @@
-# launch-diagnostics Specification
+# Spec Delta
 
-## Purpose
-
-Make a failed session-terminal launch legible: when the `dtach` binary is
-missing or `dtachSessions.dtachPath` is wrong, surface one actionable warning
-instead of VS Code's raw launch-failure output — without any extension-host
-capability probe, which would false-negative because the host does not source
-`.bashrc`.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Legible warning when a session terminal fails to launch
 
