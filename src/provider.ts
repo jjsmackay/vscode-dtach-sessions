@@ -78,13 +78,28 @@ export function readBoundSockets(): Set<string> | undefined {
  * — is recorded as its basename alone. Matching only the absolute form read
  * every session on a long path as dead.
  *
- * The basename match is safe to accept: socket names carry a `_<hash>` minted
- * per session, so a collision with an unrelated directory's socket is
+ * And the recorded path is the one at `bind()` time: renaming the socket file
+ * doesn't update it. So a socket with a `_<hash>` is matched by any entry whose
+ * file name ends in `_<hash>.dtach`, which covers both forms and any number of
+ * renames. Only a hashless (pre-hash) socket falls back to its current path.
+ *
+ * The suffix match is safe to accept: the hash is minted per session and kept
+ * across rename, so a collision with an unrelated directory's socket is
  * negligible — and it errs toward "alive", which merely restores the behaviour
  * that existed before liveness detection.
  */
 export function socketIsBound(bound: Set<string>, socket: string): boolean {
-  return bound.has(socket) || bound.has(path.basename(socket));
+  const hash = hashOf(path.basename(socket));
+  if (!hash) {
+    return bound.has(socket) || bound.has(path.basename(socket));
+  }
+  const suffix = `_${hash}.dtach`;
+  for (const entry of bound) {
+    if (path.basename(entry).endsWith(suffix)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export type SortBy = 'created' | 'lastAttached' | 'name' | 'status';

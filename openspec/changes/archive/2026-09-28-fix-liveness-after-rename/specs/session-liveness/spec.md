@@ -1,15 +1,6 @@
-# session-liveness Specification
+# Spec Delta
 
-## Purpose
-
-Knowing whether a listed socket still has a dtach master behind it. A socket file
-outlives a master that dies abnormally (host reboot, OOM kill, `kill -9`; a clean
-exit unlinks it), so being a socket is not evidence that a session can be
-attached. Liveness is what lets the extension restart such a session in place
-instead of failing at it, and what stops a dead session reporting a Claude status
-that nothing is producing.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Liveness detection for listed sessions
 
@@ -68,37 +59,3 @@ way liveness reaches the row's badge, icon, or status ordering.
 
 - **WHEN** the kernel bound-socket table cannot be read
 - **THEN** all sessions are treated as alive and behaviour matches that of the extension before liveness detection existed
-
-### Requirement: A session with no master presents no recorded status
-
-A session whose socket has no dtach master SHALL NOT present a Claude
-run-state, and SHALL NOT contribute to the activity-bar waiting count, regardless
-of what its status file records — a recorded state cannot be current when the
-process that recorded it is gone.
-
-Suppression SHALL occur where status is resolved for presentation, so that the
-row description, the row icon, the waiting count, and the status sort order agree
-without separate handling.
-
-Suppression SHALL NOT delete the status file, and SHALL NOT alter the decay rules
-for recorded states, including the rule that `waiting` and `done` do not decay.
-
-#### Scenario: Ghost waiting bell is suppressed
-
-- **WHEN** a session recorded `waiting` before the host restarted and its socket now has no master
-- **THEN** the row shows no waiting bell and the activity-bar waiting count excludes it
-
-#### Scenario: Suppression does not delete the status file
-
-- **WHEN** a session with no master has its status suppressed during a refresh
-- **THEN** its status file remains on disk
-
-#### Scenario: Status order treats it as statusless
-
-- **WHEN** sessions are ordered by status and one of them has no master but a recorded `waiting` state
-- **THEN** it is ordered as a session with no status, not as a waiting session
-
-#### Scenario: Live session status is unaffected
-
-- **WHEN** a live session has a recorded `waiting` status
-- **THEN** it shows the waiting bell and counts toward the badge as before

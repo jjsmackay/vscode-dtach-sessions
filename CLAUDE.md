@@ -151,10 +151,14 @@ Shared helpers belong in `provider.ts`; command flow stays in `extension.ts`.
   A path is **not** always recorded as dtach was given it: `sun_path` caps a unix
   address at 108 bytes, so dtach `chdir`s to the socket's directory and binds the
   bare basename when the path is longer. Short paths (the default socketDir) show
-  absolute, long ones show basename-only — hence `socketIsBound` matching either
-  form; matching only the absolute path read every session under a long
-  `socketDir` as dead. Basename matching is safe because socket names carry a
-  per-session `_<hash>`, and it errs toward "alive" (pre-liveness behaviour).
+  absolute, long ones show basename-only. The recorded path is also the one at
+  **`bind()` time**: a rename moves the file but not the kernel entry, so a
+  current-path match read every renamed session as dead (and clicking it ran a
+  bogus restart-in-place that typed `startupCommand` into the live session).
+  Hence `socketIsBound` matches any entry whose file name ends in the socket's
+  `_<hash>.dtach`, covering both forms and any rename; only hashless sockets fall
+  back to absolute path or basename. Safe because the hash is per session and
+  kept across rename, and it errs toward "alive" (pre-liveness behaviour).
   Related: `lsof -t <socketpath>` returns **empty for a live unix socket** (a
   path arg doesn't match one — that needs `-U`), so the `lsof -t … || pgrep …` in
   `resolvePidsCommand` always falls through to pgrep; the comment there claiming
