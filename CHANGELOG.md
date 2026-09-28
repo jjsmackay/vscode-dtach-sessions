@@ -5,6 +5,37 @@ All notable changes to the **dtach Sessions** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-28
+
+### Added
+
+- **Sessions reattach when the window reopens.** After a reload or a full
+  restart, each window reattaches the sessions it had attached when it closed.
+  Detaching a session or closing its tab takes it off that list. A session
+  whose dtach process is gone is not restarted; click it to restart it in place.
+  Set `dtachSessions.reattachOnStartup` to `false` to start every session
+  detached.
+
+### Changed
+
+- **VS Code no longer restores session terminals itself.** A full restart used
+  to bring each one back as a plain shell in the old tab, with the old output
+  replayed but no dtach behind it: a tab that looked like the session and
+  wasn't. Session terminals now opt out of VS Code's terminal persistence, and
+  the extension reattaches them instead. The cost is on reload: VS Code's
+  scrollback for the tab, the tab order and any splits start fresh, and dtach's
+  redraw repaints the current screen.
+
+### Fixed
+
+- **Renamed sessions no longer read as dead.** The kernel keeps a socket's
+  original path after the file is renamed, so a renamed session looked like its
+  dtach process was gone. Clicking it told you the session had been restarted
+  and typed `startupCommand` into the live session. Liveness now matches the
+  session's id, which a rename keeps.
+- **Killing a dead session removes its socket.** The kill matched its own shell
+  and killed it before the socket was removed, so the row stayed listed.
+
 ## [0.5.0] - 2026-09-07
 
 ### Added
@@ -242,6 +273,7 @@ only — no behaviour changes.
   native integrated terminals on the remote extension host, with terminal
   reuse that survives a window reload.
 
+[0.6.0]: https://github.com/jjsmackay/vscode-dtach-sessions/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jjsmackay/vscode-dtach-sessions/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/jjsmackay/vscode-dtach-sessions/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jjsmackay/vscode-dtach-sessions/compare/v0.3.3...v0.4.0
